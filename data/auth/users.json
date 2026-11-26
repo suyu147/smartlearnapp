@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "id": "user-1784612179451-8t0mhh",
+      "username": "susu",
+      "passwordHash": "126675f43ed9df7dab4820ad814d85f88a13b40fdd3becc5af0cadc0f6ab8302041d0d6fc480fd7e1c86eeb3b10111b8a3cdd2f587c623169ed6abd2730b070e",
+      "salt": "79f78316ed94d71bb3de96914a8f24e8e306d30f8174747f9e84580f031b11be",
+      "role": "user",
+      "createdAt": "2026-07-21T05:36:19.451Z"
+    }
+  ]
+}

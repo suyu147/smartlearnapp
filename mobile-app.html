@@ -1,0 +1,1849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智学方舟 · 移动端原型</title>
+<style>
+/* ========== 基础 ========== */
+:root{
+  --brand:#2563eb; --brand-2:#3b82f6; --brand-3:#6d28d9;
+  --bg:#f4f8ff; --surface:#ffffff; --text:#0f172a; --muted:#6b7a90; --line:#e6edf7;
+  --green:#10b981; --amber:#f59e0b; --red:#ef4444; --violet:#8b5cf6; --cyan:#06b6d4;
+  --shadow-sm:0 1px 2px rgba(15,23,42,.04), 0 10px 24px -16px rgba(37,99,235,.35);
+  --radius:22px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0}
+body{
+  font-family:"Inter","SF Pro Display",-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--text);
+  background:
+    radial-gradient(1100px 600px at 18% -5%, #dbeafe 0%, transparent 60%),
+    radial-gradient(900px 520px at 105% 105%, #e0e7ff 0%, transparent 58%),
+    #eef3fb;
+  min-height:100vh;
+  display:flex;align-items:center;justify-content:center;gap:56px;
+  padding:28px;
+  font-variant-numeric:tabular-nums;
+}
+button{font:inherit;color:inherit}
+svg{fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+h1,h2,h3,h4,p{margin:0}
+img{max-width:100%}
+::-webkit-scrollbar{width:0;height:0}
+
+/* ========== 手机外壳 ========== */
+.device{
+  position:relative;flex:none;width:390px;height:844px;
+  background:linear-gradient(160deg,#1e293b,#0b1220 55%);
+  border-radius:56px;padding:10px;
+  box-shadow:0 50px 90px -30px rgba(15,23,42,.55), 0 0 0 1px rgba(255,255,255,.35) inset;
+}
+.screen{
+  position:relative;width:100%;height:100%;background:var(--bg);
+  border-radius:46px;overflow:hidden;display:flex;flex-direction:column;
+}
+.island{
+  position:absolute;top:11px;left:50%;transform:translateX(-50%);
+  width:104px;height:26px;background:#0b1220;border-radius:20px;z-index:90;
+}
+.statusbar{
+  flex:none;height:48px;padding:6px 24px 0;display:flex;align-items:center;justify-content:space-between;
+  font-size:12px;font-weight:700;letter-spacing:.02em;position:relative;z-index:91;
+}
+.sb-right{display:flex;align-items:center;gap:6px;color:#0f172a}
+.viewport{position:relative;flex:1;overflow:hidden}
+
+/* ========== 页面容器 ========== */
+.page{
+  position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;
+  padding:6px 20px 112px;display:none;
+}
+.page.active{display:block;animation:pageIn .34s cubic-bezier(.22,.61,.36,1)}
+@keyframes pageIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* ========== 通用头部 ========== */
+.head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0 16px}
+.eyebrow{font-size:11.5px;color:var(--muted);font-weight:500}
+.head h1{font-size:22px;font-weight:800;letter-spacing:-.03em;margin-top:3px}
+.head-actions{display:flex;align-items:center;gap:9px}
+.icon-btn{
+  position:relative;width:40px;height:40px;border-radius:50%;background:#fff;border:1px solid var(--line);
+  display:grid;place-items:center;color:#334155;cursor:pointer;box-shadow:var(--shadow-sm);
+}
+.icon-btn svg{width:19px;height:19px}
+.icon-btn .dot{position:absolute;top:9px;right:10px;width:7px;height:7px;border-radius:50%;background:#ef4444;border:1.5px solid #fff}
+.avatar{
+  width:40px;height:40px;border-radius:50%;border:0;cursor:pointer;
+  background:linear-gradient(135deg,#fbbf24,#f97316);color:#fff;font-weight:800;font-size:14px;
+  box-shadow:0 6px 14px -6px rgba(249,115,22,.7);
+}
+.avatar.lg{width:64px;height:64px;font-size:22px;border-radius:22px}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 0 12px;position:sticky;top:-6px;z-index:12;
+  background:linear-gradient(var(--bg) 72%,rgba(244,248,255,0));
+}
+.topbar h2{font-size:16.5px;font-weight:750;letter-spacing:-.02em}
+.topbar .icon-btn{width:36px;height:36px}
+.topbar .icon-btn svg{width:17px;height:17px}
+.spacer{width:36px;height:36px}
+
+/* ========== 基础组件 ========== */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow-sm)}
+.section-head{display:flex;align-items:center;justify-content:space-between;margin:20px 2px 10px}
+.section-head h3{font-size:14.5px;font-weight:750;letter-spacing:-.01em}
+.section-head .link{display:inline-flex;align-items:center;gap:2px;font-size:11.5px;color:var(--brand);font-weight:600;cursor:pointer}
+.section-head .link svg{width:13px;height:13px}
+.muted{color:var(--muted);font-size:11.5px;font-weight:500}
+.grow{flex:1;min-width:0}
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}
+.btn{
+  border:0;border-radius:14px;padding:12px 18px;font-weight:700;font-size:13px;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;transition:transform .15s,box-shadow .2s;
+}
+.btn:active{transform:scale(.97)}
+.btn svg{width:16px;height:16px}
+.btn-primary{background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;box-shadow:0 12px 22px -12px rgba(37,99,235,.9)}
+.btn-white{background:#fff;color:var(--brand);box-shadow:0 10px 20px -12px rgba(15,23,42,.5)}
+.btn-ghost{background:#fff;color:var(--brand);border:1px solid #dbe7fb}
+.btn-block{width:100%}
+.pill{
+  display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:999px;
+  font-size:10.5px;font-weight:650;background:#eef4ff;color:var(--brand);
+}
+.pill.green{background:#e8fbf3;color:#059669}
+.pill.amber{background:#fff7e8;color:#d97706}
+.pill.violet{background:#f4efff;color:#7c3aed}
+.bar{height:6px;border-radius:99px;background:#e9eff9;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#60a5fa,#2563eb)}
+.chips{display:flex;gap:8px;overflow-x:auto;padding:2px 20px 4px;margin:0 -20px}
+.chip{
+  flex:none;border:1px solid var(--line);background:#fff;color:#526075;
+  padding:8px 14px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;
+  transition:.18s;white-space:nowrap;
+}
+.chip.active{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 8px 16px -8px rgba(37,99,235,.8)}
+
+/* ========== 首页 ========== */
+.hero{
+  position:relative;overflow:hidden;border-radius:26px;padding:18px;color:#fff;
+  background:linear-gradient(135deg,#2563eb 0%,#4f46e5 55%,#7c3aed 100%);
+  box-shadow:0 24px 44px -20px rgba(37,99,235,.8);
+}
+.hero::before{content:"";position:absolute;width:190px;height:190px;border-radius:50%;top:-80px;right:-45px;background:radial-gradient(circle,rgba(255,255,255,.35),transparent 65%)}
+.hero::after{content:"";position:absolute;width:160px;height:160px;border-radius:50%;border:1px solid rgba(255,255,255,.22);bottom:-95px;left:-35px}
+.hero-top{position:relative;display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:600}
+.hero-badge{display:inline-flex;align-items:center;gap:4px;background:rgba(255,255,255,.18);padding:5px 10px;border-radius:999px;backdrop-filter:blur(4px)}
+.hero-badge svg{width:13px;height:13px}
+.hero-week{color:rgba(255,255,255,.78)}
+.hero-main{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px}
+.hero-title{font-size:19px;font-weight:800;letter-spacing:-.02em}
+.hero-sub{font-size:11.5px;color:rgba(255,255,255,.8);margin:5px 0 14px;max-width:180px;line-height:1.5}
+.hero .btn-white{padding:10px 16px;font-size:12px;border-radius:12px}
+.ring{
+  --p:62;position:relative;flex:none;width:84px;height:84px;border-radius:50%;
+  background:conic-gradient(#fff calc(var(--p) * 1%),rgba(255,255,255,.24) 0);
+  display:grid;place-items:center;
+}
+.ring>div{
+  width:68px;height:68px;border-radius:50%;background:rgba(59,63,175,.55);
+  display:grid;place-items:center;font-size:16px;font-weight:800;letter-spacing:-.02em;
+  backdrop-filter:blur(6px);
+}
+.task{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #f1f5fc}
+.task:last-child{border-bottom:0;padding-bottom:2px}
+.task:first-child{padding-top:2px}
+.task-ico{width:38px;height:38px;border-radius:13px;display:grid;place-items:center;flex:none}
+.task-ico svg{width:17px;height:17px}
+.t-blue{background:#eaf1ff;color:#2563eb}
+.t-violet{background:#f3eeff;color:#7c3aed}
+.t-green{background:#e7fbf2;color:#059669}
+.t-amber{background:#fff5e6;color:#d97706}
+.t-cyan{background:#e6f9fd;color:#0891b2}
+.t-rose{background:#ffecef;color:#e11d48}
+.task-title{font-size:12.5px;font-weight:650;line-height:1.45}
+.task-meta{font-size:10.5px;color:var(--muted);margin-top:3px}
+.task.done .task-title{color:#94a3b8;text-decoration:line-through}
+.tick{
+  width:23px;height:23px;border-radius:50%;border:1.6px solid #d7e3f6;background:#fff;
+  display:grid;place-items:center;cursor:pointer;flex:none;color:transparent;transition:.18s;
+}
+.tick svg{width:12px;height:12px;stroke-width:2.6}
+.tick.done{background:#10b981;border-color:#10b981;color:#fff}
+.course-mini{display:flex;align-items:center;gap:13px;cursor:pointer}
+.thumb{
+  width:62px;height:62px;border-radius:18px;display:grid;place-items:center;flex:none;color:#fff;
+  box-shadow:0 10px 18px -12px rgba(37,99,235,.8);
+}
+.thumb svg{width:26px;height:26px;stroke-width:1.5}
+.grad-1{background:linear-gradient(135deg,#38bdf8,#2563eb)}
+.grad-2{background:linear-gradient(135deg,#a78bfa,#7c3aed)}
+.grad-3{background:linear-gradient(135deg,#34d399,#0d9488)}
+.grad-4{background:linear-gradient(135deg,#fbbf24,#f97316)}
+.mini-title{font-size:13.5px;font-weight:750;letter-spacing:-.01em}
+.mini-sub{font-size:10.5px;color:var(--muted);margin:3px 0 8px}
+.mini-foot{display:flex;justify-content:space-between;font-size:10px;color:#94a3b8;margin-top:6px}
+.quick-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.quick{
+  display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 4px 11px;
+  background:#fff;border:1px solid var(--line);border-radius:18px;cursor:pointer;box-shadow:var(--shadow-sm);
+  transition:transform .15s;
+}
+.quick:active{transform:scale(.96)}
+.quick-ico{width:42px;height:42px;border-radius:14px;display:grid;place-items:center}
+.quick-ico svg{width:19px;height:19px}
+.quick span{font-size:10.5px;font-weight:600;color:#475569}
+.stats3{display:flex;align-items:center;justify-content:space-between;text-align:center;padding:14px 8px}
+.stats3>div{flex:1;position:relative}
+.stats3>div+div::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:1px;background:#eef3fb}
+.stat-num{font-size:19px;font-weight:800;letter-spacing:-.03em}
+.stat-num small{font-size:10px;font-weight:650;color:var(--muted);margin-left:1px}
+.stat-label{font-size:10px;color:var(--muted);margin-top:4px}
+.hcards{display:flex;gap:12px;overflow-x:auto;margin:0 -20px;padding:2px 20px 6px}
+.rec{
+  flex:none;width:206px;border-radius:20px;overflow:hidden;background:#fff;
+  border:1px solid var(--line);box-shadow:var(--shadow-sm);cursor:pointer;
+}
+.rec-cover{height:82px;position:relative;display:flex;align-items:flex-end;padding:10px;color:#fff;overflow:hidden}
+.rec-cover::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(15,23,42,0),rgba(15,23,42,.35))}
+.rec-cover svg{position:relative;z-index:1;width:20px;height:20px;opacity:.9}
+.rec-body{padding:10px 12px 12px}
+.rec-title{font-size:12px;font-weight:700;line-height:1.4}
+.rec-meta{font-size:10px;color:var(--muted);margin-top:5px;display:flex;gap:6px;align-items:center}
+
+/* ========== 底部导航 ========== */
+.nav{
+  position:absolute;left:0;right:0;bottom:0;height:78px;z-index:40;
+  display:flex;align-items:flex-end;justify-content:space-around;padding:0 10px 12px;
+  background:rgba(255,255,255,.9);backdrop-filter:blur(20px);
+  border-top:1px solid rgba(226,237,247,.9);
+  transition:transform .32s cubic-bezier(.22,.61,.36,1);
+}
+.screen.no-nav .nav{transform:translateY(112%)}
+.nav-item{
+  width:58px;display:flex;flex-direction:column;align-items:center;gap:4px;
+  background:none;border:0;color:#9aa8bd;font-size:10px;font-weight:600;cursor:pointer;padding:0 0 2px;
+}
+.nav-item svg{width:22px;height:22px}
+.nav-item.active{color:var(--brand)}
+.nav-item.active svg{stroke-width:2.1}
+.nav-ai{
+  width:56px;height:56px;border-radius:50%;border:0;margin-bottom:20px;cursor:pointer;
+  background:linear-gradient(135deg,#3b82f6,#6d28d9);color:#fff;display:grid;place-items:center;
+  box-shadow:0 14px 26px -10px rgba(37,99,235,.9), 0 0 0 6px rgba(255,255,255,.65);
+  transition:transform .18s;
+}
+.nav-ai svg{width:23px;height:23px}
+.nav-ai:active{transform:scale(.94)}
+
+/* ========== 学习页 ========== */
+.goal-card{
+  display:flex;align-items:center;gap:12px;padding:14px;border-radius:20px;color:#1e3a8a;
+  background:linear-gradient(135deg,#e8f1ff,#eef2ff);border:1px solid #dbe8ff;
+}
+.goal-ico{width:42px;height:42px;border-radius:14px;background:#fff;display:grid;place-items:center;color:var(--brand);flex:none;box-shadow:0 6px 12px -8px rgba(37,99,235,.6)}
+.goal-ico svg{width:20px;height:20px}
+.goal-title{font-size:13px;font-weight:750}
+.goal-sub{font-size:10.5px;color:#64748b;margin-top:3px}
+.mini-btn{border:0;background:#fff;color:var(--brand);font-size:11px;font-weight:700;padding:7px 12px;border-radius:10px;cursor:pointer;box-shadow:0 6px 12px -8px rgba(37,99,235,.6)}
+.seg{display:flex;background:#e8eefb;border-radius:13px;padding:3px;margin:16px 0 4px}
+.seg button{
+  flex:1;border:0;background:none;padding:8px 4px;border-radius:10px;font-size:11.5px;font-weight:650;color:#64748b;cursor:pointer;transition:.2s;
+}
+.seg button.active{background:#fff;color:var(--brand);box-shadow:0 4px 10px -6px rgba(15,23,42,.3)}
+.plan-panel{display:none}
+.plan-panel.show{display:block;animation:fadeUp .3s ease}
+.timeline{padding-top:6px}
+.phase{position:relative;padding:0 0 20px 34px}
+.phase::before{content:"";position:absolute;left:11px;top:26px;bottom:2px;width:2px;background:linear-gradient(#c9d9f8,#e8eefb)}
+.phase:last-child{padding-bottom:4px}
+.phase:last-child::before{display:none}
+.phase-dot{
+  position:absolute;left:0;top:0;width:24px;height:24px;border-radius:50%;z-index:1;
+  display:grid;place-items:center;background:#eef3fb;color:#a5b4c8;border:2px solid #fff;box-shadow:0 0 0 1px #dbe6f7;
+}
+.phase-dot svg{width:12px;height:12px;stroke-width:2.4}
+.phase.done .phase-dot{background:#dcfce7;color:#16a34a}
+.phase.now .phase-dot{background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;box-shadow:0 0 0 4px rgba(59,130,246,.16)}
+.phase-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
+.phase-name{font-size:13px;font-weight:750}
+.phase-state{font-size:10px;font-weight:700;padding:3px 8px;border-radius:999px;background:#f1f5fb;color:#8898ad}
+.phase.done .phase-state{background:#e8fbf3;color:#059669}
+.phase.now .phase-state{background:#eaf1ff;color:#2563eb}
+.phase-sub{font-size:10.5px;color:var(--muted);margin-bottom:10px}
+.mini-tasks{display:flex;flex-direction:column;gap:7px}
+.mini-task{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px 11px;font-size:11.5px;font-weight:600;color:#334155;box-shadow:0 4px 10px -10px rgba(15,23,42,.2)}
+.mini-task .ico{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;flex:none;background:#eef3fb;color:#a5b4c8}
+.mini-task .ico svg{width:11px;height:11px;stroke-width:2.6}
+.mini-task.done .ico{background:#10b981;color:#fff}
+.mini-task.now .ico{background:#eaf1ff;color:#2563eb}
+.mini-task.now{border-color:#cfe0ff;box-shadow:0 8px 16px -14px rgba(37,99,235,.9)}
+.mini-task .pill{margin-left:auto;font-size:9.5px;padding:3px 7px}
+.phase.lock .mini-task{color:#94a3b8;box-shadow:none;background:#f9fbfe}
+.ai-plan-btn{margin:14px 0 4px}
+.mistake-banner{display:flex;gap:10px;margin:6px 0 14px}
+.mistake-banner .card{flex:1;padding:13px;text-align:center}
+.mistake-num{font-size:20px;font-weight:800;color:#e11d48;letter-spacing:-.03em}
+.mistake-num.blue{color:var(--brand)}
+.mistake-label{font-size:10px;color:var(--muted);margin-top:3px}
+.err-row{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid #f1f5fc;cursor:pointer}
+.err-row:last-child{border-bottom:0;padding-bottom:2px}
+.err-tag{flex:none;font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:7px;background:#ffecef;color:#e11d48}
+.err-text{font-size:11.5px;font-weight:600;line-height:1.45}
+.err-sub{font-size:10px;color:var(--muted);margin-top:2px}
+.err-row>svg{width:14px;height:14px;color:#cbd5e1;flex:none}
+
+/* ========== AI 对话 ========== */
+#page-chat{padding:0;overflow:hidden}
+.page.active#page-chat{display:flex;flex-direction:column}
+.chat-head{
+  flex:none;display:flex;align-items:center;gap:11px;padding:14px 20px 12px;
+  background:rgba(244,248,255,.92);backdrop-filter:blur(12px);border-bottom:1px solid rgba(230,237,247,.7);z-index:6;
+}
+.ai-avatar{
+  width:40px;height:40px;border-radius:14px;flex:none;display:grid;place-items:center;color:#fff;
+  background:linear-gradient(135deg,#3b82f6,#7c3aed);box-shadow:0 10px 18px -10px rgba(37,99,235,.9);
+}
+.ai-avatar svg{width:19px;height:19px}
+.chat-name{font-size:14px;font-weight:750}
+.chat-status{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);margin-top:2px}
+.online{width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 0 2px rgba(16,185,129,.15)}
+.chat-head .icon-btn{width:34px;height:34px;margin-left:auto}
+.chat-scroll{flex:1;min-height:0;overflow-y:auto;padding:10px 18px 154px;scroll-behavior:smooth}
+.ctx{
+  display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:#475569;background:#fff;
+  border:1px solid var(--line);padding:6px 10px;border-radius:999px;margin-bottom:14px;box-shadow:var(--shadow-sm);
+}
+.ctx svg{width:12px;height:12px;color:var(--brand)}
+.ctx button{border:0;background:none;color:var(--brand);font-size:10px;font-weight:700;cursor:pointer;padding:0}
+.msg{display:flex;flex-direction:column;margin-bottom:14px;max-width:88%}
+.msg.me{align-self:flex-end;align-items:flex-end;margin-left:auto}
+.bubble{
+  background:#fff;border:1px solid var(--line);border-radius:18px 18px 18px 6px;
+  padding:12px 14px;font-size:12px;line-height:1.75;color:#243247;box-shadow:var(--shadow-sm);
+}
+.msg.me .bubble{
+  background:linear-gradient(135deg,#3b82f6,#2563eb);border:0;color:#fff;
+  border-radius:18px 18px 6px 18px;box-shadow:0 12px 22px -14px rgba(37,99,235,.9);
+}
+.bubble p+p{margin-top:6px}
+.bubble ul{margin:6px 0 0;padding-left:16px}
+.bubble li{margin-bottom:4px}
+.bubble b{font-weight:750}
+.formula{
+  margin:8px 0;padding:9px 11px;border-radius:10px;background:#f4f8ff;border:1px dashed #d5e3f9;
+  font-family:"Cambria Math","Times New Roman",serif;font-size:11.5px;color:#1e40af;text-align:center;
+}
+.bubble-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.bubble-actions button{
+  border:1px solid #dbe7fb;background:#f7faff;color:var(--brand);border-radius:999px;
+  font-size:10px;font-weight:650;padding:5px 10px;cursor:pointer;
+}
+.msg-time{font-size:9px;color:#aab7c9;margin-top:5px;padding:0 4px}
+.typing{display:flex;gap:4px;align-items:center;height:22px;padding:0 18px}
+.typing span{width:6px;height:6px;border-radius:50%;background:#93b4e6;animation:blink 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.18s}
+.typing span:nth-child(3){animation-delay:.36s}
+@keyframes blink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+.chat-foot{
+  position:absolute;left:0;right:0;bottom:78px;z-index:7;padding:10px 16px 12px;
+  background:linear-gradient(180deg,rgba(244,248,255,0),var(--bg) 30%);
+}
+.chat-quick{display:flex;gap:7px;overflow-x:auto;padding:0 2px 9px}
+.chat-quick .chip{padding:6px 11px;font-size:10.5px;background:rgba(255,255,255,.92)}
+.chat-input{
+  display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+  border-radius:18px;padding:7px 7px 7px 14px;box-shadow:0 14px 26px -18px rgba(15,23,42,.5);
+}
+.chat-input input{flex:1;border:0;outline:0;font:inherit;font-size:12px;background:none;color:var(--text);min-width:0}
+.chat-input input::placeholder{color:#a3b1c6}
+.send{
+  width:36px;height:36px;border-radius:12px;border:0;flex:none;cursor:pointer;
+  background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;display:grid;place-items:center;
+}
+.send svg{width:16px;height:16px}
+
+/* ========== 资源库 ========== */
+.search{
+  display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+  border-radius:14px;padding:11px 14px;box-shadow:var(--shadow-sm);color:#94a3b8;
+}
+.search svg{width:16px;height:16px;flex:none}
+.search input{flex:1;border:0;outline:0;background:none;font:inherit;font-size:12px;color:var(--text)}
+.search input::placeholder{color:#a3b1c6}
+.kb-card{
+  margin-top:14px;padding:15px;border-radius:20px;color:#fff;position:relative;overflow:hidden;cursor:pointer;
+  background:linear-gradient(120deg,#0f766e,#0891b2);
+  box-shadow:0 16px 30px -18px rgba(8,145,178,.9);
+}
+.kb-card::before{content:"";position:absolute;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.14);right:-40px;top:-55px}
+.kb-card::after{content:"";position:absolute;width:90px;height:90px;border-radius:50%;border:1px solid rgba(255,255,255,.2);right:10px;bottom:-50px}
+.kb-row{display:flex;align-items:center;gap:11px;position:relative;z-index:1}
+.kb-ico{width:38px;height:38px;border-radius:12px;background:rgba(255,255,255,.18);display:grid;place-items:center;flex:none}
+.kb-ico svg{width:18px;height:18px}
+.kb-title{font-size:13px;font-weight:750}
+.kb-sub{font-size:10px;color:rgba(255,255,255,.75);margin-top:3px}
+.kb-row .pill{background:rgba(255,255,255,.2);color:#fff;margin-left:auto;font-size:9.5px}
+.filter-row{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px}
+.filter-row span{font-size:11px;color:var(--muted)}
+.res{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #eef3fb;cursor:pointer}
+.res:last-child{border-bottom:0}
+.res-ico{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;flex:none}
+.res-ico svg{width:18px;height:18px}
+.res-title{font-size:12.5px;font-weight:650;line-height:1.4}
+.res-meta{font-size:10px;color:var(--muted);margin-top:4px}
+.res-side{display:flex;align-items:center;gap:6px;flex:none}
+.res-side>svg{width:13px;height:13px;color:#cbd5e1}
+.res-side .pill{font-size:9px;padding:3px 7px}
+
+/* ========== 我的 ========== */
+.profile-top{display:flex;align-items:center;gap:14px;padding:14px 2px 18px}
+.profile-name{font-size:18px;font-weight:800;letter-spacing:-.02em}
+.profile-goal{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--muted);margin-top:4px}
+.profile-goal svg{width:12px;height:12px;color:var(--brand)}
+.level-row{display:flex;align-items:center;gap:7px;margin-top:7px}
+.level-row .bar{flex:1;max-width:110px;height:5px}
+.level-row span{font-size:9.5px;color:#8798ad;font-weight:600}
+.p-stats{display:flex;text-align:center;padding:15px 4px}
+.p-stats>div{flex:1;position:relative}
+.p-stats>div+div::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:1px;background:#eef3fb}
+.bars7{display:flex;align-items:flex-end;gap:9px;height:104px;margin-top:6px}
+.bar-col{flex:1;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:7px;font-size:9px;color:#a3b1c6;font-weight:600}
+.bar-col i{display:block;width:100%;max-width:22px;border-radius:7px;background:#dbe7fb;transition:height .5s}
+.bar-col.today i{background:linear-gradient(180deg,#60a5fa,#2563eb)}
+.bar-col.today{color:var(--brand)}
+.menu{margin-top:4px}
+.menu-row{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid #eef3fb;cursor:pointer}
+.menu-row:last-child{border-bottom:0;padding-bottom:2px}
+.menu-ico{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;flex:none}
+.menu-ico svg{width:16px;height:16px}
+.menu-title{font-size:12.5px;font-weight:650}
+.menu-sub{font-size:10px;color:var(--muted);margin-top:2px}
+.menu-row>svg:last-child{width:14px;height:14px;color:#cbd5e1;margin-left:auto;flex:none}
+
+/* ========== 学习报告 ========== */
+.report-hero{
+  padding:18px;border-radius:24px;color:#fff;position:relative;overflow:hidden;
+  background:linear-gradient(120deg,#1d4ed8,#4f46e5 60%,#7c3aed);
+  box-shadow:0 22px 40px -22px rgba(37,99,235,.9);
+}
+.report-hero::before{content:"";position:absolute;width:160px;height:160px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.25),transparent 65%);right:-50px;top:-60px}
+.report-label{font-size:10.5px;color:rgba(255,255,255,.75);position:relative}
+.report-big{font-size:34px;font-weight:800;letter-spacing:-.04em;margin-top:2px;position:relative}
+.report-big small{font-size:13px;font-weight:600;margin-left:3px;letter-spacing:0}
+.report-delta{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;background:rgba(255,255,255,.18);padding:4px 8px;border-radius:999px;margin-top:7px;position:relative}
+.report-hero .bars7{height:54px;margin-top:14px;gap:7px;position:relative}
+.report-hero .bar-col{font-size:8px;color:rgba(255,255,255,.7)}
+.report-hero .bar-col i{background:rgba(255,255,255,.28);max-width:16px;border-radius:4px}
+.report-hero .bar-col.today i{background:#fff}
+.report-hero .bar-col.today{color:#fff}
+.donut-wrap{display:flex;align-items:center;gap:18px;padding:6px 2px 2px}
+.donut{
+  width:108px;height:108px;border-radius:50%;flex:none;position:relative;
+  background:conic-gradient(#2563eb 0 42%,#8b5cf6 42% 70%,#06b6d4 70% 90%,#f59e0b 90% 100%);
+}
+.donut::after{content:"";position:absolute;inset:15px;background:#fff;border-radius:50%}
+.donut-center{position:absolute;inset:0;z-index:1;display:grid;place-items:center;text-align:center}
+.donut-center b{font-size:17px;letter-spacing:-.02em;display:block}
+.donut-center span{font-size:8.5px;color:var(--muted);display:block;margin-top:1px}
+.legend{flex:1;display:flex;flex-direction:column;gap:9px}
+.legend-row{display:flex;align-items:center;gap:7px;font-size:10.5px;color:#475569}
+.legend-row b{margin-left:auto;font-size:10.5px;color:#334155}
+.ldot{width:8px;height:8px;border-radius:50%;flex:none}
+.mastery-row{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.mastery-row:last-child{margin-bottom:0}
+.mastery-name{font-size:11.5px;font-weight:600;width:64px;flex:none}
+.mastery-row .bar{flex:1;height:7px}
+.mastery-val{font-size:10.5px;font-weight:700;color:#475569;width:30px;text-align:right;flex:none}
+.advice{
+  border-radius:18px;padding:14px;display:flex;gap:11px;
+  background:linear-gradient(135deg,#fffbeb,#fff7ed);border:1px solid #fde8c8;
+}
+.advice-ico{width:34px;height:34px;border-radius:11px;background:#fff;display:grid;place-items:center;color:#d97706;flex:none;box-shadow:0 6px 12px -8px rgba(217,119,6,.6)}
+.advice-ico svg{width:17px;height:17px}
+.advice-title{font-size:11.5px;font-weight:750;color:#92400e}
+.advice-text{font-size:10.5px;color:#a16207;line-height:1.65;margin-top:4px}
+
+/* ========== 练习 / 测验 ========== */
+.quiz-meta{display:flex;align-items:center;justify-content:space-between;margin:2px 0 8px;font-size:10.5px;color:var(--muted);font-weight:600}
+.timer{display:inline-flex;align-items:center;gap:4px;background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 9px;color:#475569;font-weight:700}
+.timer svg{width:11px;height:11px}
+.quiz-progress{height:5px;border-radius:99px;background:#e6eefb;overflow:hidden;margin-bottom:16px}
+.quiz-progress i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,#60a5fa,#2563eb);transition:width .35s ease}
+.quiz-tag{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;color:var(--brand);background:#eef4ff;border-radius:7px;padding:4px 8px;margin-bottom:9px}
+.quiz-q{font-size:15.5px;font-weight:750;line-height:1.6;letter-spacing:-.01em;margin-bottom:16px}
+.option{
+  display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;
+  padding:13px 14px;border-radius:15px;background:#fff;border:1.5px solid var(--line);
+  margin-bottom:10px;cursor:pointer;transition:.18s;font-size:12.5px;line-height:1.6;color:#334155;
+  box-shadow:0 4px 10px -10px rgba(15,23,42,.25);
+}
+.option:active{transform:scale(.99)}
+.option .tag{
+  width:25px;height:25px;border-radius:50%;background:#eef4ff;color:#2563eb;
+  display:grid;place-items:center;font-weight:750;font-size:11px;flex:none;
+}
+.option.correct{border-color:#34d399;background:#f2fdf8}
+.option.correct .tag{background:#10b981;color:#fff}
+.option.wrong{border-color:#fca5a5;background:#fef4f4}
+.option.wrong .tag{background:#ef4444;color:#fff}
+.option.dim{opacity:.55}
+.explain{
+  display:none;margin-top:6px;border-radius:16px;padding:14px;
+  background:#f7faff;border:1px solid #dbe8ff;animation:fadeUp .25s ease;
+}
+.explain.show{display:block}
+.explain-head{font-size:11.5px;font-weight:750;color:#047857;margin-bottom:5px;display:flex;align-items:center;gap:5px}
+.explain-head::before{content:"";width:6px;height:6px;border-radius:50%;background:#10b981}
+.explain p{font-size:11px;line-height:1.7;color:#4b5b70}
+.hide{display:none!important}
+.quiz-next{margin-top:14px}
+.score-ring{
+  --score:67;width:132px;height:132px;border-radius:50%;margin:6px auto 0;
+  background:conic-gradient(#2563eb calc(var(--score) * 1%),#e7eefb 0);
+  display:grid;place-items:center;position:relative;
+}
+.score-ring>div{
+  width:108px;height:108px;border-radius:50%;background:#fff;display:grid;place-items:center;
+  text-align:center;box-shadow:0 0 0 1px #eef3fb inset;
+}
+.score-ring b{font-size:30px;font-weight:800;letter-spacing:-.04em;display:block;line-height:1}
+.score-ring span{font-size:10px;color:var(--muted);display:block;margin-top:3px}
+.result-title{text-align:center;font-size:15px;font-weight:750;margin-top:14px}
+.result-sub{text-align:center;font-size:10.5px;color:var(--muted);margin-top:4px}
+.result-stats{display:flex;text-align:center;margin-top:16px;padding:13px 4px;background:#f7faff;border:1px solid #e6eefb;border-radius:16px}
+.result-stats>div{flex:1;position:relative}
+.result-stats>div+div::before{content:"";position:absolute;left:0;top:4px;bottom:4px;width:1px;background:#e2ebfa}
+.result-stats b{font-size:15px;font-weight:800;display:block}
+.result-stats span{font-size:9.5px;color:var(--muted);display:block;margin-top:3px}
+
+/* ========== 能力诊断 ========== */
+.diag-intro{font-size:11px;line-height:1.7;color:var(--muted);margin:2px 2px 14px}
+.field{margin-bottom:14px}
+.field-label{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;font-weight:700;color:#334155;margin-bottom:8px}
+.field-label span{font-size:9.5px;font-weight:600;color:var(--muted)}
+.field .chips{margin:0;padding:0;flex-wrap:wrap;overflow:visible;gap:7px}
+.field .chip{padding:7px 12px;font-size:11px}
+.skill-chip{
+  display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border-radius:10px;
+  background:#f4f8ff;border:1px solid #e1ebfb;color:#37517a;font-size:10.5px;font-weight:600;margin:0 5px 5px 0;
+}
+.skill-chip i{width:5px;height:5px;border-radius:50%;background:#3b82f6}
+.diag-result{display:none;margin-top:18px}
+.diag-result.show{display:block;animation:fadeUp .45s ease}
+.score-block{display:flex;align-items:center;gap:18px;padding:16px}
+.score-block .score-ring{width:104px;height:104px;margin:0;flex:none}
+.score-block .score-ring>div{width:84px;height:84px}
+.score-block .score-ring b{font-size:24px}
+.match-label{font-size:10px;color:var(--muted);font-weight:600}
+.match-title{font-size:15px;font-weight:800;margin-top:4px;letter-spacing:-.02em}
+.match-desc{font-size:10.5px;color:var(--muted);line-height:1.65;margin-top:5px}
+.radar-wrap{padding:4px 2px 0}
+.radar{width:100%;max-width:262px;display:block;margin:0 auto}
+.radar .grid{fill:none;stroke:#e1ebfa;stroke-width:1}
+.radar .axis{stroke:#e7eefb;stroke-width:1}
+.radar .area{fill:rgba(37,99,235,.16);stroke:#2563eb;stroke-width:2;stroke-linejoin:round}
+.radar .pt{fill:#2563eb;stroke:#fff;stroke-width:1.5}
+.radar text{font-size:9.5px;fill:#7c8aa0;font-weight:600;stroke:none}
+.gap-group{margin-bottom:12px}
+.gap-title{font-size:10.5px;font-weight:700;color:#475569;margin-bottom:7px;display:flex;align-items:center;gap:5px}
+.gap-title::before{content:"";width:6px;height:6px;border-radius:2px;background:#10b981}
+.gap-title.want::before{background:#f59e0b}
+.gap-chips{display:flex;flex-wrap:wrap;gap:6px}
+.gap-chip{font-size:10px;font-weight:600;padding:5px 9px;border-radius:8px;background:#e9fbf3;color:#047857}
+.gap-chip.want{background:#fff6e6;color:#b45309}
+.step{display:flex;gap:11px;padding-bottom:13px;position:relative}
+.step:last-child{padding-bottom:2px}
+.step-num{
+  width:22px;height:22px;border-radius:50%;flex:none;display:grid;place-items:center;
+  font-size:10px;font-weight:750;background:#eaf1ff;color:#2563eb;border:1px solid #d7e4fb;z-index:1;
+}
+.step-line{position:absolute;left:10.5px;top:24px;bottom:2px;width:1.5px;background:#e4edfa}
+.step:last-child .step-line{display:none}
+.step-title{font-size:11.5px;font-weight:700}
+.step-sub{font-size:10px;color:var(--muted);margin-top:3px;line-height:1.6}
+.job-cards{display:flex;gap:10px;overflow-x:auto;margin:0 -20px;padding:2px 20px 4px}
+.job-card{
+  flex:none;width:158px;padding:13px;border-radius:16px;background:#fff;border:1px solid var(--line);
+  cursor:pointer;box-shadow:var(--shadow-sm);
+}
+.job-card b{font-size:11.5px;display:block}
+.job-card span{font-size:9.5px;color:var(--muted);display:block;margin-top:3px}
+.job-card .job-score{font-size:16px;font-weight:800;color:var(--brand);margin-top:8px;letter-spacing:-.02em}
+
+/* ========== 知识图谱 ========== */
+.kg-summary{display:flex;gap:8px;margin:4px 0 12px}
+.kg-summary .card{flex:1;padding:12px 13px}
+.kg-summary b{font-size:16px;font-weight:800;display:block;letter-spacing:-.02em}
+.kg-summary span{font-size:9.5px;color:var(--muted);display:block;margin-top:2px}
+.kg-canvas{
+  border-radius:22px;position:relative;overflow:hidden;
+  background:
+    radial-gradient(400px 260px at 50% 40%,#eef5ff,transparent 70%),
+    radial-gradient(#dce8f8 1px,transparent 1px);
+  background-size:auto,16px 16px;
+  border:1px solid var(--line);box-shadow:var(--shadow-sm);
+}
+.kg-canvas svg{display:block;width:100%;height:auto}
+.kg-edge{stroke:#d5e2f5;stroke-width:1.4}
+.kg-node{cursor:pointer}
+.kg-node circle{fill:#eef3fb;stroke:#fff;stroke-width:2.5;transition:filter .2s,fill .2s}
+.kg-node text{font-size:9px;fill:#7c8aa0;font-weight:650;text-anchor:middle;dominant-baseline:middle;stroke:none;pointer-events:none}
+.kg-node.core circle{fill:url(#kgGrad)}
+.kg-node.core text{fill:#fff;font-size:11px;font-weight:750}
+.kg-node.done circle{fill:#dbeafe;stroke:#fff}
+.kg-node.done text{fill:#1d4ed8}
+.kg-node.learning circle{fill:#fef3c7;stroke:#fff}
+.kg-node.learning text{fill:#b45309}
+.kg-node.locked circle{fill:#f1f5f9;stroke:#fff}
+.kg-node.locked text{fill:#94a3b8}
+.kg-node.sel circle{stroke:#2563eb;stroke-width:3;filter:drop-shadow(0 6px 10px rgba(37,99,235,.4))}
+.kg-legend{display:flex;gap:12px;padding:11px 4px 0;font-size:9.5px;color:var(--muted)}
+.kg-legend span{display:inline-flex;align-items:center;gap:5px}
+.kg-dot{width:8px;height:8px;border-radius:50%}
+.kg-info{margin-top:12px}
+.kg-info-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.kg-badge{font-size:9.5px;font-weight:700;padding:4px 8px;border-radius:7px;background:#e8fbf3;color:#047857}
+.kg-title{font-size:15px;font-weight:800;letter-spacing:-.02em}
+.kg-desc{font-size:10.5px;line-height:1.7;color:var(--muted);margin-top:5px}
+.kg-cta{margin-top:14px}
+
+/* ========== 课程详情 ========== */
+.course-hero{
+  position:relative;overflow:hidden;border-radius:24px;padding:18px;color:#fff;
+  background:linear-gradient(135deg,#1d4ed8,#4f46e5 58%,#7c3aed);
+  box-shadow:0 22px 40px -22px rgba(37,99,235,.9);
+}
+.course-hero::before{content:"";position:absolute;width:170px;height:170px;border-radius:50%;background:rgba(255,255,255,.14);right:-50px;top:-70px}
+.course-hero::after{content:"";position:absolute;width:120px;height:120px;border-radius:50%;border:1px solid rgba(255,255,255,.2);left:-45px;bottom:-70px}
+.course-cover{width:46px;height:46px;border-radius:14px;background:rgba(255,255,255,.18);display:grid;place-items:center;position:relative;z-index:1}
+.course-cover svg{width:22px;height:22px}
+.course-title{font-size:19px;font-weight:800;letter-spacing:-.02em;margin-top:12px;position:relative;z-index:1}
+.course-sub{font-size:10.5px;color:rgba(255,255,255,.78);margin-top:5px;position:relative;z-index:1}
+.course-meta{display:flex;gap:14px;font-size:10px;color:rgba(255,255,255,.85);margin-top:12px;position:relative;z-index:1}
+.course-meta b{font-weight:750}
+.course-progress{margin-top:12px;position:relative;z-index:1}
+.course-progress .bar{background:rgba(255,255,255,.25)}
+.course-progress .bar i{background:#fff}
+.course-progress .row{display:flex;justify-content:space-between;font-size:9.5px;color:rgba(255,255,255,.75);margin-top:5px}
+.chapter{display:flex;align-items:center;gap:11px;padding:12px 0;border-bottom:1px solid #eef3fb;cursor:pointer}
+.chapter:last-child{border-bottom:0;padding-bottom:2px}
+.chapter-ico{width:32px;height:32px;border-radius:10px;background:#f1f6ff;color:#7c93b5;display:grid;place-items:center;flex:none}
+.chapter-ico svg{width:14px;height:14px}
+.chapter.done .chapter-ico{background:#e7fbf2;color:#059669}
+.chapter.now .chapter-ico{background:#eaf1ff;color:#2563eb}
+.chapter.lock .chapter-ico{background:#f4f6fa;color:#b6c2d4}
+.chapter-title{font-size:11.5px;font-weight:650}
+.chapter-sub{font-size:9.5px;color:var(--muted);margin-top:3px}
+.chapter-side{font-size:9.5px;color:#94a3b8;flex:none;display:flex;align-items:center;gap:4px}
+.chapter-side svg{width:12px;height:12px}
+.sticky-cta{margin-top:20px;padding:0}
+
+/* ========== 弹层 / 提示 ========== */
+.overlay{position:absolute;inset:0;background:rgba(15,23,42,.45);opacity:0;pointer-events:none;transition:.25s;z-index:95}
+.overlay.show{opacity:1;pointer-events:auto}
+.sheet{
+  position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:28px 28px 0 0;
+  padding:10px 20px 30px;transform:translateY(112%);transition:transform .34s cubic-bezier(.22,.61,.36,1);
+  z-index:96;box-shadow:0 -20px 40px -20px rgba(15,23,42,.35);
+}
+.sheet.show{transform:none}
+.sheet-handle{width:38px;height:4px;border-radius:99px;background:#e2e8f0;margin:4px auto 16px}
+.sheet h3{font-size:16px;font-weight:800;letter-spacing:-.02em}
+.sheet p{font-size:11px;color:var(--muted);line-height:1.6;margin-top:6px}
+.sheet textarea{
+  width:100%;height:86px;resize:none;border:1px solid var(--line);border-radius:14px;background:#f8fbff;
+  padding:12px;font:inherit;font-size:11.5px;line-height:1.6;outline:none;margin-top:12px;color:var(--text);
+}
+.sheet textarea:focus{border-color:#b9d4fa;background:#fff}
+.sheet .chips{margin:12px 0 2px;padding:0;flex-wrap:wrap;overflow:visible}
+.sheet .chip{padding:7px 12px;font-size:10.5px}
+.toast{
+  position:absolute;left:50%;bottom:104px;transform:translate(-50%,12px);z-index:99;
+  background:rgba(15,23,42,.9);color:#fff;font-size:11px;font-weight:600;padding:10px 16px;border-radius:999px;
+  max-width:300px;text-align:center;opacity:0;pointer-events:none;transition:.25s;backdrop-filter:blur(8px);
+  box-shadow:0 12px 24px -12px rgba(15,23,42,.6);
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ========== 桌面端页面导航 ========== */
+.proto{
+  width:236px;flex:none;padding:22px 18px;border-radius:26px;
+  background:rgba(255,255,255,.72);backdrop-filter:blur(20px);
+  border:1px solid rgba(255,255,255,.9);box-shadow:0 40px 80px -40px rgba(15,23,42,.35);
+}
+.proto-brand{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.proto-logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#7c3aed);color:#fff;display:grid;place-items:center;flex:none}
+.proto-logo svg{width:18px;height:18px}
+.proto h2{font-size:14px;font-weight:800;letter-spacing:-.02em}
+.proto .sub{font-size:10px;color:var(--muted);margin-top:2px}
+.proto-group{font-size:9.5px;font-weight:700;color:#9aa8bd;letter-spacing:.08em;margin:14px 0 6px;padding-left:6px}
+.proto-link{
+  display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  background:none;border:0;padding:8px 9px;border-radius:11px;font-size:11.5px;
+  color:#526075;font-weight:550;cursor:pointer;transition:.16s;
+}
+.proto-link:hover{background:#fff;color:#2563eb}
+.proto-link.active{background:#fff;color:var(--brand);font-weight:750;box-shadow:0 8px 18px -14px rgba(37,99,235,.9)}
+.proto-num{
+  width:19px;height:19px;border-radius:6px;background:#eef4ff;color:#2563eb;
+  display:grid;place-items:center;font-size:9.5px;font-weight:750;flex:none;
+}
+.proto-tip{font-size:9.5px;line-height:1.7;color:#94a3b8;margin-top:16px;padding:10px;border-radius:10px;background:rgba(255,255,255,.7)}
+
+/* ========== 响应式 ========== */
+@media (max-width:1080px){.proto{display:none}}
+@media (max-width:520px){
+  body{display:block;padding:0;background:#fff}
+  .device{width:100%;height:100vh;height:100dvh;border-radius:0;padding:0;background:transparent;box-shadow:none}
+  .screen{border-radius:0;border-radius:0}
+  .island{display:none}
+  .statusbar{height:40px;padding:8px 20px 0}
+  .proto{display:none}
+  .toast{bottom:96px}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 22c3.9 0 6-2.7 6-6 0-4.6-4-6.4-4-10 0-1.6.5-3 .5-3S12 5 11 7c-.6 1.2-.6 2.4 0 3.4C9.5 9.5 9 8 9 6.5 7.5 8.5 6 11 6 14.5 6 18 8.5 22 12 22z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15v3"/><path d="M12 10v8"/><path d="M17 6v12"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></symbol>
+  <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V18h8v-3.3A7 7 0 0 0 12 2z"/></symbol>
+  <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10.5 21a2 2 0 0 0 3 0"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="2.5"/><path d="m16 10 6-3v10l-6-3z"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 6-6 6 6 6"/><path d="m16 6 6 6-6 6"/></symbol>
+  <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3v2a3 3 0 0 1-3 3"/><path d="M7 5H4v2a3 3 0 0 0 3 3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="2.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-award" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="m9 12-2 9 5-3 5 3-2-9"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.3.9-4.5 4.4 1 6.1-5.5-2.9-5.5 2.9 1-6.1L3 9.5l6.3-.9z"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-4-.8L3 21l1.9-4.9A8.4 8.4 0 0 1 12 3.5a8.4 8.4 0 0 1 9 8z"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 15H6L5 6"/></symbol>
+</svg>
+
+<div class="device">
+  <div class="screen">
+    <div class="island"></div>
+    <div class="statusbar">
+      <span>9:41</span>
+      <div class="sb-right">
+        <svg width="17" height="11" viewBox="0 0 17 11" fill="currentColor" stroke="none"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg>
+        <svg width="16" height="12" viewBox="0 0 16 12"><path d="M1 4.3a10 10 0 0 1 14 0"/><path d="M3.9 7.1a6.2 6.2 0 0 1 8.2 0"/><circle cx="8" cy="10.2" r="1.2" fill="currentColor" stroke="none"/></svg>
+        <svg width="25" height="12" viewBox="0 0 25 12"><rect x=".6" y=".6" width="20.5" height="10.8" rx="3" stroke="currentColor" stroke-width="1"/><rect x="2.6" y="2.6" width="14" height="6.8" rx="1.6" fill="currentColor" stroke="none"/><path d="M22.8 4v4a2.6 2.6 0 0 0 0-4z" fill="currentColor" stroke="none"/></svg>
+      </div>
+    </div>
+    <div class="viewport" id="viewport">
+      <!-- ===== 1. 首页 ===== -->
+      <section class="page active" id="page-home">
+        <header class="head">
+          <div>
+            <div class="eyebrow">11月25日 · 周三</div>
+            <h1>下午好，小雨</h1>
+          </div>
+          <div class="head-actions">
+            <button class="icon-btn" data-toast="暂无新的学习提醒"><svg><use href="#i-bell"/></svg><span class="dot"></span></button>
+            <button class="avatar" data-tab="profile">雨</button>
+          </div>
+        </header>
+
+        <div class="hero">
+          <div class="hero-top">
+            <span class="hero-badge"><svg><use href="#i-flame"/></svg> 连续学习 12 天</span>
+            <span class="hero-week">本周 3 / 5 天</span>
+          </div>
+          <div class="hero-main">
+            <div>
+              <div class="hero-title">今日学习目标</div>
+              <div class="hero-sub">再学 18 分钟，就达成今天的目标</div>
+              <button class="btn btn-white" data-go="course"><svg><use href="#i-play"/></svg> 继续学习</button>
+            </div>
+            <div class="ring" style="--p:62"><div>62%</div></div>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>今日任务</h3><span class="muted" id="task-count">1/3 已完成</span></div>
+        <div class="card">
+          <div class="task done">
+            <div class="task-ico t-blue"><svg><use href="#i-video"/></svg></div>
+            <div class="grow"><div class="task-title">观看《决策树》第 3 节</div><div class="task-meta">视频 · 25 分钟</div></div>
+            <button class="tick done" aria-label="标记完成"><svg><use href="#i-check"/></svg></button>
+          </div>
+          <div class="task">
+            <div class="task-ico t-violet"><svg><use href="#i-file"/></svg></div>
+            <div class="grow"><div class="task-title">完成 10 道决策树练习</div><div class="task-meta">练习 · 约 12 分钟</div></div>
+            <button class="tick" aria-label="标记完成"><svg><use href="#i-check"/></svg></button>
+          </div>
+          <div class="task">
+            <div class="task-ico t-amber"><svg><use href="#i-bulb"/></svg></div>
+            <div class="grow"><div class="task-title">复习 8 个待巩固知识点</div><div class="task-meta">复习 · 约 8 分钟</div></div>
+            <button class="tick" aria-label="标记完成"><svg><use href="#i-check"/></svg></button>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>继续学习</h3><span class="link" data-go="plan">学习计划 <svg><use href="#i-right"/></svg></span></div>
+        <div class="card course-mini" data-go="course">
+          <div class="thumb grad-1"><svg><use href="#i-book"/></svg></div>
+          <div class="grow">
+            <div class="mini-title">机器学习基础</div>
+            <div class="mini-sub">第三章 · 决策树</div>
+            <div class="bar"><i style="width:62%"></i></div>
+            <div class="mini-foot"><span>已学 62%</span><span>上次 3.2 信息增益</span></div>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>快捷入口</h3></div>
+        <div class="quick-grid">
+          <div class="quick" data-tab="chat"><div class="quick-ico t-violet"><svg><use href="#i-sparkles"/></svg></div><span>AI 讲题</span></div>
+          <div class="quick" data-go="quiz"><div class="quick-ico t-rose"><svg><use href="#i-file"/></svg></div><span>错题重练</span></div>
+          <div class="quick" data-go="kg"><div class="quick-ico t-cyan"><svg><use href="#i-compass"/></svg></div><span>知识图谱</span></div>
+          <div class="quick" data-go="career"><div class="quick-ico t-amber"><svg><use href="#i-target"/></svg></div><span>能力诊断</span></div>
+        </div>
+
+        <div class="section-head"><h3>今日数据</h3><span class="muted">实时更新</span></div>
+        <div class="card stats3">
+          <div><div class="stat-num">42<small>分钟</small></div><div class="stat-label">今日学习</div></div>
+          <div><div class="stat-num">8<small>个</small></div><div class="stat-label">新增掌握</div></div>
+          <div><div class="stat-num">86<small>%</small></div><div class="stat-label">练习正确率</div></div>
+        </div>
+
+        <div class="section-head"><h3>为你推荐</h3><span class="link" data-tab="resources">资源库 <svg><use href="#i-right"/></svg></span></div>
+        <div class="hcards">
+          <div class="rec" data-go="course">
+            <div class="rec-cover grad-2"><svg><use href="#i-layers"/></svg></div>
+            <div class="rec-body"><div class="rec-title">集成学习：从 Bagging 到 XGBoost</div><div class="rec-meta">课程 · 8.5k 人在学</div></div>
+          </div>
+          <div class="rec" data-go="course">
+            <div class="rec-cover grad-3"><svg><use href="#i-chart"/></svg></div>
+            <div class="rec-body"><div class="rec-title">Python 数据分析实战</div><div class="rec-meta">课程 · 4.8 分</div></div>
+          </div>
+          <div class="rec" data-go="career">
+            <div class="rec-cover grad-4"><svg><use href="#i-target"/></svg></div>
+            <div class="rec-body"><div class="rec-title">算法岗面试冲刺计划</div><div class="rec-meta">路径 · 6 周</div></div>
+          </div>
+        </div>
+        <div style="height:8px"></div>
+      </section>
+      <!-- ===== 2. 学习 ===== -->
+      <section class="page" id="page-plan">
+        <header class="head">
+          <div>
+            <div class="eyebrow">智能学习</div>
+            <h1>我的学习</h1>
+          </div>
+          <div class="head-actions">
+            <button class="icon-btn" data-sheet="plan"><svg><use href="#i-plus"/></svg></button>
+          </div>
+        </header>
+
+        <div class="goal-card">
+          <div class="goal-ico"><svg><use href="#i-target"/></svg></div>
+          <div class="grow">
+            <div class="goal-title">目标 · 算法工程师</div>
+            <div class="goal-sub">预计 8 周完成 · 当前进度 24%</div>
+          </div>
+          <button class="mini-btn" data-go="career">去诊断</button>
+        </div>
+
+        <div class="seg" id="plan-seg">
+          <button class="active" data-panel="path">学习路径</button>
+          <button data-panel="courses">我的课程</button>
+          <button data-panel="mistakes">错题本</button>
+        </div>
+
+        <div class="plan-panel show" data-panel="path">
+          <div class="timeline">
+            <div class="phase done">
+              <div class="phase-dot"><svg><use href="#i-check"/></svg></div>
+              <div class="phase-head"><span class="phase-name">阶段一 · 基础夯实</span><span class="phase-state">已完成</span></div>
+              <div class="phase-sub">4 / 4 个任务 · 用时 12 天</div>
+              <div class="mini-tasks">
+                <div class="mini-task done"><span class="ico"><svg><use href="#i-check"/></svg></span>Python 基础语法<span class="pill green">已掌握</span></div>
+                <div class="mini-task done"><span class="ico"><svg><use href="#i-check"/></svg></span>数据结构与算法入门<span class="pill green">已掌握</span></div>
+              </div>
+            </div>
+            <div class="phase now">
+              <div class="phase-dot"><svg><use href="#i-bolt"/></svg></div>
+              <div class="phase-head"><span class="phase-name">阶段二 · 核心进阶</span><span class="phase-state">进行中</span></div>
+              <div class="phase-sub">2 / 5 个任务 · 预计还需 9 天</div>
+              <div class="mini-tasks">
+                <div class="mini-task now" data-go="course"><span class="ico"><svg><use href="#i-play"/></svg></span>机器学习基础 · 决策树<span class="pill">62%</span></div>
+                <div class="mini-task" data-go="quiz"><span class="ico"><svg><use href="#i-file"/></svg></span>随堂练习 · 信息增益<span class="pill amber">待完成</span></div>
+                <div class="mini-task"><span class="ico"><svg><use href="#i-book"/></svg></span>概率论与数理统计<span class="pill">待开始</span></div>
+              </div>
+            </div>
+            <div class="phase lock">
+              <div class="phase-dot"><svg><use href="#i-lock"/></svg></div>
+              <div class="phase-head"><span class="phase-name">阶段三 · 项目实战</span><span class="phase-state">未解锁</span></div>
+              <div class="phase-sub">完成阶段二后自动解锁</div>
+              <div class="mini-tasks">
+                <div class="mini-task"><span class="ico"><svg><use href="#i-lock"/></svg></span>Kaggle 房价预测实战</div>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-block ai-plan-btn" data-sheet="plan"><svg><use href="#i-sparkles"/></svg> 让 AI 重新规划学习路径</button>
+        </div>
+
+        <div class="plan-panel" data-panel="courses">
+          <div class="card mt12">
+            <div class="res" data-go="course">
+              <div class="res-ico t-blue"><svg><use href="#i-book"/></svg></div>
+              <div class="grow"><div class="res-title">机器学习基础</div><div class="res-meta">共 32 节 · 已学 20 节</div><div class="bar mt8"><i style="width:62%"></i></div></div>
+              <div class="res-side"><span class="pill">62%</span></div>
+            </div>
+            <div class="res" data-go="course">
+              <div class="res-ico t-violet"><svg><use href="#i-chart"/></svg></div>
+              <div class="grow"><div class="res-title">概率论与数理统计</div><div class="res-meta">共 24 节 · 已学 6 节</div><div class="bar mt8"><i style="width:25%"></i></div></div>
+              <div class="res-side"><span class="pill">25%</span></div>
+            </div>
+            <div class="res" data-go="course">
+              <div class="res-ico t-green"><svg><use href="#i-code"/></svg></div>
+              <div class="grow"><div class="res-title">Python 数据分析实战</div><div class="res-meta">共 18 节 · 已完成</div><div class="bar mt8"><i style="width:100%"></i></div></div>
+              <div class="res-side"><span class="pill green">已完成</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="plan-panel" data-panel="mistakes">
+          <div class="mistake-banner">
+            <div class="card"><div class="mistake-num">23</div><div class="mistake-label">待巩固错题</div></div>
+            <div class="card"><div class="mistake-num blue">78%</div><div class="mistake-label">近 7 天订正率</div></div>
+          </div>
+          <div class="card">
+            <div class="err-row" data-go="quiz">
+              <span class="err-tag">决策树</span>
+              <div class="grow"><div class="err-text">信息增益与基尼系数的适用场景</div><div class="err-sub">错 2 次 · 上次 11月23日</div></div>
+              <svg><use href="#i-right"/></svg>
+            </div>
+            <div class="err-row" data-go="quiz">
+              <span class="err-tag">模型评估</span>
+              <div class="grow"><div class="err-text">类别不均衡时该看哪个指标</div><div class="err-sub">错 1 次 · 上次 11月24日</div></div>
+              <svg><use href="#i-right"/></svg>
+            </div>
+            <div class="err-row" data-go="quiz">
+              <span class="err-tag">概率论</span>
+              <div class="grow"><div class="err-text">条件熵的推导步骤</div><div class="err-sub">错 3 次 · 上次 11月22日</div></div>
+              <svg><use href="#i-right"/></svg>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-block mt12" data-go="quiz">开始错题重练</button>
+        </div>
+        <div style="height:8px"></div>
+      </section>
+      <!-- ===== 3. AI 学习助手 ===== -->
+      <section class="page" id="page-chat">
+        <div class="chat-head">
+          <div class="ai-avatar"><svg><use href="#i-sparkles"/></svg></div>
+          <div>
+            <div class="chat-name">智学 AI</div>
+            <div class="chat-status"><span class="online"></span>在线 · 你的学习助手</div>
+          </div>
+          <button class="icon-btn" data-sheet="plan" aria-label="新建对话"><svg><use href="#i-plus"/></svg></button>
+        </div>
+
+        <div class="chat-scroll" id="chat-scroll">
+          <div class="ctx"><svg><use href="#i-book"/></svg> 正在学习：机器学习 · 决策树 <button data-go="course">切换</button></div>
+
+          <div class="msg me">
+            <div class="bubble">信息增益和基尼系数有什么区别？做决策树时应该选哪个？</div>
+            <div class="msg-time">14:02</div>
+          </div>
+
+          <div class="msg ai">
+            <div class="bubble">
+              <p>两者都是衡量节点<b>不纯度</b>的指标，区别在于计算方式和使用场景：</p>
+              <p><b>信息增益</b>基于信息熵，偏向取值较多的特征；<b>基尼系数</b>计算更简单，偏向连续值和二分类。</p>
+              <div class="formula">Gain(D,a) = Ent(D) − Σ |Dᵛ|/|D| · Ent(Dᵛ)</div>
+              <ul>
+                <li>ID3 / C4.5 用信息增益（率）</li>
+                <li>CART 用基尼系数，训练更快</li>
+                <li>数据量大时优先选 CART</li>
+              </ul>
+              <div class="bubble-actions">
+                <button data-go="quiz">生成 3 道同类题</button>
+                <button data-go="kg">用知识图谱看</button>
+                <button data-toast="已为你切换为更直观的图示讲解">换个例子</button>
+              </div>
+            </div>
+            <div class="msg-time">14:02</div>
+          </div>
+
+          <div class="msg ai">
+            <div class="bubble">
+              <p>要不要我根据你当前的薄弱点，直接生成一份 5 分钟的巩固练习？</p>
+              <div class="bubble-actions">
+                <button data-go="quiz">好，开始练习</button>
+                <button data-toast="已记录，稍后为你安排复习">晚点提醒我</button>
+              </div>
+            </div>
+            <div class="msg-time">14:03</div>
+          </div>
+        </div>
+
+        <div class="chat-foot">
+          <div class="chat-quick">
+            <button class="chip">帮我讲一道题</button>
+            <button class="chip">生成随堂测验</button>
+            <button class="chip">总结这篇文档</button>
+            <button class="chip">画一张思维导图</button>
+          </div>
+          <form class="chat-input" id="chat-form">
+            <input id="chat-input" type="text" placeholder="问点什么，比如：讲讲随机森林" autocomplete="off">
+            <button class="send" type="submit" aria-label="发送"><svg><use href="#i-send"/></svg></button>
+          </form>
+        </div>
+      </section>
+      <!-- ===== 4. 资源库 ===== -->
+      <section class="page" id="page-resources">
+        <header class="head">
+          <div>
+            <div class="eyebrow">学习资源</div>
+            <h1>资源库</h1>
+          </div>
+          <div class="head-actions">
+            <button class="icon-btn" data-toast="筛选条件：全部类型 · 最近更新"><svg><use href="#i-sliders"/></svg></button>
+          </div>
+        </header>
+
+        <div class="search"><svg><use href="#i-search"/></svg><input id="res-search" type="text" placeholder="搜索课程、文档、题目、思维导图"></div>
+
+        <div class="chips mt12" id="res-chips">
+          <button class="chip active" data-type="all">全部</button>
+          <button class="chip" data-type="doc">文档</button>
+          <button class="chip" data-type="video">视频</button>
+          <button class="chip" data-type="quiz">习题</button>
+          <button class="chip" data-type="map">思维导图</button>
+          <button class="chip" data-type="code">代码</button>
+        </div>
+
+        <div class="kb-card" data-toast="进入机器学习知识库：32 篇文档 · 4 个脑图">
+          <div class="kb-row">
+            <div class="kb-ico"><svg><use href="#i-layers"/></svg></div>
+            <div><div class="kb-title">机器学习知识库</div><div class="kb-sub">32 篇文档 · 4 个脑图 · 本周更新 6 篇</div></div>
+            <span class="pill">进入</span>
+          </div>
+        </div>
+
+        <div class="filter-row"><span>全部资源 · 共 128 个</span><span>最近更新</span></div>
+        <div class="card" id="res-list">
+          <div class="res" data-type="doc" data-go="course">
+            <div class="res-ico t-blue"><svg><use href="#i-file"/></svg></div>
+            <div class="grow"><div class="res-title">决策树算法详解</div><div class="res-meta">文档 · 12 页 · 机器学习知识库</div></div>
+            <div class="res-side"><span class="pill">已读 62%</span><svg><use href="#i-right"/></svg></div>
+          </div>
+          <div class="res" data-type="video" data-go="course">
+            <div class="res-ico t-violet"><svg><use href="#i-video"/></svg></div>
+            <div class="grow"><div class="res-title">信息熵与信息增益 · 视频课</div><div class="res-meta">视频 · 18:24 · 王老师</div></div>
+            <div class="res-side"><span class="pill violet">未看完</span><svg><use href="#i-right"/></svg></div>
+          </div>
+          <div class="res" data-type="quiz" data-go="quiz">
+            <div class="res-ico t-rose"><svg><use href="#i-file"/></svg></div>
+            <div class="grow"><div class="res-title">决策树练习题集 · 20 题</div><div class="res-meta">习题 · 平均正确率 74%</div></div>
+            <div class="res-side"><span class="pill amber">去练习</span><svg><use href="#i-right"/></svg></div>
+          </div>
+          <div class="res" data-type="map" data-go="kg">
+            <div class="res-ico t-cyan"><svg><use href="#i-compass"/></svg></div>
+            <div class="grow"><div class="res-title">机器学习知识图谱</div><div class="res-meta">思维导图 · 68 个节点 · 已掌握 42</div></div>
+            <div class="res-side"><svg><use href="#i-right"/></svg></div>
+          </div>
+          <div class="res" data-type="code" data-toast="代码模板已复制到剪贴板">
+            <div class="res-ico t-green"><svg><use href="#i-code"/></svg></div>
+            <div class="grow"><div class="res-title">sklearn 决策树代码模板</div><div class="res-meta">代码 · Python · 可直接运行</div></div>
+            <div class="res-side"><span class="pill green">复制</span><svg><use href="#i-right"/></svg></div>
+          </div>
+        </div>
+        <div style="height:8px"></div>
+      </section>
+
+      <!-- ===== 5. 我的 ===== -->
+      <section class="page" id="page-profile">
+        <header class="head">
+          <div><div class="eyebrow">个人中心</div><h1>我的</h1></div>
+          <div class="head-actions"><button class="icon-btn" data-toast="设置面板在原型中暂未展开"><svg><use href="#i-sliders"/></svg></button></div>
+        </header>
+
+        <div class="profile-top">
+          <button class="avatar lg" data-toast="编辑个人资料">雨</button>
+          <div class="grow">
+            <div class="profile-name">林小雨</div>
+            <div class="profile-goal"><svg><use href="#i-target"/></svg> 目标：算法工程师 · 大四在读</div>
+            <div class="level-row"><span>Lv.6 学者</span><div class="bar"><i style="width:72%"></i></div><span>2,480 积分</span></div>
+          </div>
+        </div>
+
+        <div class="card p-stats">
+          <div><div class="stat-num">126<small>h</small></div><div class="stat-label">累计学习</div></div>
+          <div><div class="stat-num">12<small>天</small></div><div class="stat-label">连续打卡</div></div>
+          <div><div class="stat-num">342<small>个</small></div><div class="stat-label">掌握知识点</div></div>
+        </div>
+
+        <div class="section-head"><h3>本周学习</h3><span class="link" data-go="report">学习报告 <svg><use href="#i-right"/></svg></span></div>
+        <div class="card">
+          <div class="bars7">
+            <div class="bar-col"><i style="height:38%"></i>一</div>
+            <div class="bar-col"><i style="height:58%"></i>二</div>
+            <div class="bar-col"><i style="height:26%"></i>三</div>
+            <div class="bar-col"><i style="height:74%"></i>四</div>
+            <div class="bar-col"><i style="height:48%"></i>五</div>
+            <div class="bar-col"><i style="height:88%"></i>六</div>
+            <div class="bar-col today"><i style="height:62%"></i>日</div>
+          </div>
+          <div class="mini-foot" style="margin-top:10px"><span>本周累计 5.2 小时</span><span style="color:#059669;font-weight:700">较上周 +18%</span></div>
+        </div>
+
+        <div class="section-head"><h3>学习与成长</h3></div>
+        <div class="card menu">
+          <div class="menu-row" data-go="report"><div class="menu-ico t-blue"><svg><use href="#i-chart"/></svg></div><div class="grow"><div class="menu-title">学习报告</div><div class="menu-sub">查看周报与知识点掌握度</div></div><svg><use href="#i-right"/></svg></div>
+          <div class="menu-row" data-go="career"><div class="menu-ico t-amber"><svg><use href="#i-target"/></svg></div><div class="grow"><div class="menu-title">能力诊断</div><div class="menu-sub">岗位匹配度与技能差距</div></div><svg><use href="#i-right"/></svg></div>
+          <div class="menu-row" data-go="kg"><div class="menu-ico t-cyan"><svg><use href="#i-compass"/></svg></div><div class="grow"><div class="menu-title">知识图谱</div><div class="menu-sub">可视化你的知识结构</div></div><svg><use href="#i-right"/></svg></div>
+          <div class="menu-row" data-go="quiz"><div class="menu-ico t-rose"><svg><use href="#i-file"/></svg></div><div class="grow"><div class="menu-title">错题本</div><div class="menu-sub">23 道待巩固</div></div><svg><use href="#i-right"/></svg></div>
+          <div class="menu-row" data-toast="收藏夹：12 个课程 · 8 篇文档"><div class="menu-ico t-violet"><svg><use href="#i-star"/></svg></div><div class="grow"><div class="menu-title">我的收藏</div><div class="menu-sub">课程、文档与题目</div></div><svg><use href="#i-right"/></svg></div>
+          <div class="menu-row" data-toast="设置面板在原型中暂未展开"><div class="menu-ico t-green"><svg><use href="#i-sliders"/></svg></div><div class="grow"><div class="menu-title">设置</div><div class="menu-sub">账号、提醒与学习偏好</div></div><svg><use href="#i-right"/></svg></div>
+        </div>
+        <div style="height:8px"></div>
+      </section>
+      <!-- ===== 6. 课程详情 ===== -->
+      <section class="page" id="page-course">
+        <div class="topbar">
+          <button class="icon-btn" data-back><svg><use href="#i-back"/></svg></button>
+          <h2>课程详情</h2>
+          <button class="icon-btn" data-toast="已复制课程分享链接"><svg><use href="#i-msg"/></svg></button>
+        </div>
+
+        <div class="course-hero">
+          <div class="course-cover"><svg><use href="#i-book"/></svg></div>
+          <div class="course-title">机器学习基础</div>
+          <div class="course-sub">从零理解经典模型 · 配套练习与知识图谱</div>
+          <div class="course-meta"><span><b>32</b> 节</span><span><b>8.5</b> 小时</span><span><b>4.9</b> 分</span><span><b>2.3k</b> 人在学</span></div>
+          <div class="course-progress">
+            <div class="bar"><i style="width:62%"></i></div>
+            <div class="row"><span>已完成 20 / 32 节</span><span>62%</span></div>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>课程目录</h3><span class="muted">按学习顺序</span></div>
+        <div class="card">
+          <div class="chapter done">
+            <div class="chapter-ico"><svg><use href="#i-check"/></svg></div>
+            <div class="grow"><div class="chapter-title">第一章 · 机器学习概览</div><div class="chapter-sub">3 节 · 已完成</div></div>
+            <div class="chapter-side">3/3</div>
+          </div>
+          <div class="chapter done">
+            <div class="chapter-ico"><svg><use href="#i-check"/></svg></div>
+            <div class="grow"><div class="chapter-title">第二章 · 线性模型</div><div class="chapter-sub">4 节 · 已完成</div></div>
+            <div class="chapter-side">4/4</div>
+          </div>
+          <div class="chapter now">
+            <div class="chapter-ico"><svg><use href="#i-play"/></svg></div>
+            <div class="grow"><div class="chapter-title">第三章 · 决策树</div><div class="chapter-sub">3.2 信息增益 · 视频 12:36</div></div>
+            <div class="chapter-side">2/3</div>
+          </div>
+          <div class="chapter" data-go="quiz">
+            <div class="chapter-ico"><svg><use href="#i-file"/></svg></div>
+            <div class="grow"><div class="chapter-title">第三章 · 随堂练习</div><div class="chapter-sub">10 道题 · 约 12 分钟</div></div>
+            <div class="chapter-side">去练习 <svg><use href="#i-right"/></svg></div>
+          </div>
+          <div class="chapter lock">
+            <div class="chapter-ico"><svg><use href="#i-lock"/></svg></div>
+            <div class="grow"><div class="chapter-title">第四章 · 集成学习</div><div class="chapter-sub">完成第三章后解锁</div></div>
+            <div class="chapter-side">未解锁</div>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>配套资源</h3></div>
+        <div class="card">
+          <div class="res" data-go="kg">
+            <div class="res-ico t-cyan"><svg><use href="#i-compass"/></svg></div>
+            <div class="grow"><div class="res-title">本章知识图谱</div><div class="res-meta">决策树分支 · 12 个节点</div></div>
+            <div class="res-side"><svg><use href="#i-right"/></svg></div>
+          </div>
+          <div class="res" data-toast="讲义 PDF 已加入下载队列">
+            <div class="res-ico t-blue"><svg><use href="#i-file"/></svg></div>
+            <div class="grow"><div class="res-title">第三章讲义 · PDF</div><div class="res-meta">12 页 · 2.4 MB</div></div>
+            <div class="res-side"><span class="pill">下载</span></div>
+          </div>
+        </div>
+
+        <div class="sticky-cta">
+          <button class="btn btn-primary btn-block" data-toast="继续播放：3.2 信息增益">继续学习 · 3.2 信息增益</button>
+        </div>
+      </section>
+
+      <!-- ===== 7. 随堂练习 ===== -->
+      <section class="page" id="page-quiz">
+        <div class="topbar">
+          <button class="icon-btn" data-back><svg><use href="#i-back"/></svg></button>
+          <h2>随堂练习</h2>
+          <span class="timer"><svg><use href="#i-clock"/></svg><span id="quiz-timer">00:00</span></span>
+        </div>
+
+        <div class="quiz-meta"><span id="quiz-index">第 1 / 3 题</span><span>决策树专项</span></div>
+        <div class="quiz-progress"><i id="quiz-progress"></i></div>
+
+        <div class="quiz-tag"><svg style="width:11px;height:11px"><use href="#i-file"/></svg><span id="quiz-tag">机器学习 · 决策树</span></div>
+        <div class="quiz-q" id="quiz-q">下列关于“信息增益”的说法，正确的是？</div>
+        <div id="quiz-options"></div>
+
+        <div class="explain" id="quiz-explain"></div>
+        <button class="btn btn-primary btn-block quiz-next hide" id="quiz-next">下一题</button>
+      </section>
+
+      <!-- ===== 8. 练习报告 ===== -->
+      <section class="page" id="page-quiz-result">
+        <div class="topbar">
+          <button class="icon-btn" data-back><svg><use href="#i-back"/></svg></button>
+          <h2>练习报告</h2>
+          <span class="spacer"></span>
+        </div>
+
+        <div class="score-ring" id="result-ring" style="--score:67">
+          <div><b id="result-score">67</b><span>分</span></div>
+        </div>
+        <div class="result-title" id="result-title">继续保持，就差一点点</div>
+        <div class="result-sub" id="result-sub">本次共 3 题，答对 2 题</div>
+
+        <div class="result-stats">
+          <div><b id="result-correct">2</b><span>答对题数</span></div>
+          <div><b id="result-time">02:10</b><span>本次用时</span></div>
+          <div><b id="result-rate">67%</b><span>正确率</span></div>
+        </div>
+
+        <div class="section-head"><h3>知识点分析</h3></div>
+        <div class="card">
+          <div class="mastery-row"><span class="mastery-name">信息熵</span><div class="bar"><i style="width:92%"></i></div><span class="mastery-val">优秀</span></div>
+          <div class="mastery-row"><span class="mastery-name">基尼系数</span><div class="bar"><i style="width:68%"></i></div><span class="mastery-val">一般</span></div>
+          <div class="mastery-row"><span class="mastery-name">剪枝策略</span><div class="bar"><i style="width:41%"></i></div><span class="mastery-val">待加强</span></div>
+        </div>
+
+        <div class="advice mt12">
+          <div class="advice-ico"><svg><use href="#i-bulb"/></svg></div>
+          <div><div class="advice-title">AI 建议</div><div class="advice-text">你对信息熵理解不错，但剪枝策略还不够稳。建议先看 3.3 节“预剪枝与后剪枝”，再完成 5 道针对性练习。</div></div>
+        </div>
+
+        <div class="mt16"><button class="btn btn-primary btn-block" data-back>查看解析</button></div>
+        <div class="mt8"><button class="btn btn-ghost btn-block" id="retry-quiz">再练一组</button></div>
+        <div class="mt8"><button class="btn btn-ghost btn-block" data-tab="plan">返回学习页</button></div>
+      </section>
+      <!-- ===== 9. 学习报告 ===== -->
+      <section class="page" id="page-report">
+        <div class="topbar">
+          <button class="icon-btn" data-back><svg><use href="#i-back"/></svg></button>
+          <h2>学习报告</h2>
+          <button class="icon-btn" data-toast="报告已生成图片，可保存分享"><svg><use href="#i-star"/></svg></button>
+        </div>
+
+        <div class="seg" id="report-seg" style="margin-top:0">
+          <button class="active">本周</button><button>本月</button><button>全部</button>
+        </div>
+
+        <div class="report-hero mt12">
+          <div class="report-label">本周学习时长</div>
+          <div class="report-big">5.2<small>小时</small></div>
+          <span class="report-delta">较上周 +18% · 超过 76% 的同学</span>
+          <div class="bars7">
+            <div class="bar-col"><i style="height:32%"></i></div>
+            <div class="bar-col"><i style="height:54%"></i></div>
+            <div class="bar-col"><i style="height:24%"></i></div>
+            <div class="bar-col"><i style="height:72%"></i></div>
+            <div class="bar-col"><i style="height:44%"></i></div>
+            <div class="bar-col"><i style="height:86%"></i></div>
+            <div class="bar-col today"><i style="height:60%"></i></div>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>学科分布</h3><span class="muted">按学习时长</span></div>
+        <div class="card">
+          <div class="donut-wrap">
+            <div class="donut"><div class="donut-center"><div><b>5.2h</b><span>总时长</span></div></div></div>
+            <div class="legend">
+              <div class="legend-row"><span class="ldot" style="background:#2563eb"></span>机器学习<b>42%</b></div>
+              <div class="legend-row"><span class="ldot" style="background:#8b5cf6"></span>数学基础<b>28%</b></div>
+              <div class="legend-row"><span class="ldot" style="background:#06b6d4"></span>Python<b>20%</b></div>
+              <div class="legend-row"><span class="ldot" style="background:#f59e0b"></span>其他<b>10%</b></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-head"><h3>知识点掌握度</h3><span class="muted">共 12 个</span></div>
+        <div class="card">
+          <div class="mastery-row"><span class="mastery-name">决策树</span><div class="bar"><i style="width:82%"></i></div><span class="mastery-val">82%</span></div>
+          <div class="mastery-row"><span class="mastery-name">线性代数</span><div class="bar"><i style="width:76%"></i></div><span class="mastery-val">76%</span></div>
+          <div class="mastery-row"><span class="mastery-name">概率统计</span><div class="bar"><i style="width:64%"></i></div><span class="mastery-val">64%</span></div>
+          <div class="mastery-row"><span class="mastery-name">模型评估</span><div class="bar"><i style="width:58%"></i></div><span class="mastery-val">58%</span></div>
+        </div>
+
+        <div class="section-head"><h3>AI 学习洞察</h3></div>
+        <div class="advice">
+          <div class="advice-ico"><svg><use href="#i-bulb"/></svg></div>
+          <div><div class="advice-title">本周建议</div><div class="advice-text">你在「决策树」投入最多且掌握度最高。但「概率统计」本周仅学习 18 分钟，已低于计划的 40 分钟。建议明天优先完成条件概率与贝叶斯公式的复习。</div></div>
+        </div>
+
+        <div class="mt16"><button class="btn btn-primary btn-block" data-go="plan">按建议继续学习</button></div>
+      </section>
+
+      <!-- ===== 10. 能力诊断 ===== -->
+      <section class="page" id="page-career">
+        <div class="topbar">
+          <button class="icon-btn" data-back><svg><use href="#i-back"/></svg></button>
+          <h2>能力诊断</h2>
+          <span class="spacer"></span>
+        </div>
+
+        <p class="diag-intro">选择你的目标岗位，补充当前技能画像，AI 将计算匹配度、找出技能差距，并生成对应的学习路径。</p>
+
+        <div class="card">
+          <div class="field">
+            <div class="field-label">目标岗位 <span>单选</span></div>
+            <div class="chips" id="job-chips">
+              <button class="chip active">算法工程师</button>
+              <button class="chip">数据分析师</button>
+              <button class="chip">前端工程师</button>
+              <button class="chip">产品经理</button>
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:8px">
+            <div class="field-label">我的技能 <span>来自课程与练习</span></div>
+            <div>
+              <span class="skill-chip"><i></i>Python</span>
+              <span class="skill-chip"><i></i>数据结构</span>
+              <span class="skill-chip"><i></i>概率论</span>
+              <span class="skill-chip"><i></i>机器学习基础</span>
+              <span class="skill-chip" style="background:#fff7e8;border-color:#fde8c8;color:#b45309"><i style="background:#f59e0b"></i>深度学习？</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;font-size:10.5px;color:var(--muted)">
+            <span class="pill" style="background:#f4f8ff;color:#526075">本科 · 计算机</span>
+            <span class="pill" style="background:#f4f8ff;color:#526075">1 年项目经验</span>
+            <span class="pill" style="background:#f4f8ff;color:#526075">CET-6</span>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-block mt16" id="diagnose-btn"><svg><use href="#i-target"/></svg> 开始诊断</button>
+
+        <div class="diag-result" id="diagnose-result">
+          <div class="section-head"><h3>匹配结果</h3><span class="pill green">高于 76% 的求职者</span></div>
+          <div class="card score-block">
+            <div class="score-ring" style="--score:82"><div><b>82</b><span>匹配分</span></div></div>
+            <div>
+              <div class="match-label">目标岗位</div>
+              <div class="match-title" id="diag-job-label">算法工程师</div>
+              <div class="match-desc">你的编程与机器学习基础扎实，主要差距在工程实践与深度学习项目经验。</div>
+            </div>
+          </div>
+
+          <div class="section-head"><h3>能力雷达</h3><span class="muted">5 个维度</span></div>
+          <div class="card radar-wrap">
+            <svg class="radar" viewBox="0 0 260 236" aria-label="能力雷达图">
+              <polygon class="grid" points="130,42 204.2,95.9 175.9,183.1 84.1,183.1 55.8,95.9"/>
+              <polygon class="grid" points="130,68 179.4,103.9 160.6,162.1 99.4,162.1 80.6,103.9"/>
+              <polygon class="grid" points="130,94 154.7,111.9 145.3,141 114.7,141 105.3,111.9"/>
+              <line class="axis" x1="130" y1="120" x2="130" y2="42"/>
+              <line class="axis" x1="130" y1="120" x2="204.2" y2="95.9"/>
+              <line class="axis" x1="130" y1="120" x2="175.9" y2="183.1"/>
+              <line class="axis" x1="130" y1="120" x2="84.1" y2="183.1"/>
+              <line class="axis" x1="130" y1="120" x2="55.8" y2="95.9"/>
+              <polygon class="area" points="130,49.8 185.6,101.9 170.7,173.6 90.6,157.9 64.6,101.7"/>
+              <circle class="pt" cx="130" cy="49.8" r="3"/>
+              <circle class="pt" cx="185.6" cy="101.9" r="3"/>
+              <circle class="pt" cx="170.7" cy="173.6" r="3"/>
+              <circle class="pt" cx="90.6" cy="157.9" r="3"/>
+              <circle class="pt" cx="64.6" cy="101.7" r="3"/>
+              <text x="130" y="31" text-anchor="middle">专业技能</text>
+              <text x="222" y="96" text-anchor="middle">项目经验</text>
+              <text x="190" y="201" text-anchor="middle">学历背景</text>
+              <text x="70" y="201" text-anchor="middle">知识广度</text>
+              <text x="38" y="96" text-anchor="middle">综合素养</text>
+            </svg>
+          </div>
+
+          <div class="section-head"><h3>技能差距</h3><span class="muted">目标岗位要求</span></div>
+          <div class="card">
+            <div class="gap-group">
+              <div class="gap-title">已匹配 · 4 项</div>
+              <div class="gap-chips"><span class="gap-chip">Python</span><span class="gap-chip">数据结构</span><span class="gap-chip">概率论</span><span class="gap-chip">机器学习基础</span></div>
+            </div>
+            <div class="gap-group" style="margin-bottom:0">
+              <div class="gap-title want">待补齐 · 3 项</div>
+              <div class="gap-chips"><span class="gap-chip want">深度学习框架</span><span class="gap-chip want">分布式训练</span><span class="gap-chip want">工程化部署</span></div>
+            </div>
+          </div>
+
+          <div class="section-head"><h3>推荐学习路径</h3><span class="pill">约 6 周</span></div>
+          <div class="card">
+            <div class="step"><span class="step-line"></span><span class="step-num">1</span><div><div class="step-title">补齐深度学习基础</div><div class="step-sub">PyTorch 入门 · 反向传播 · CNN / RNN，预计 2 周</div></div></div>
+            <div class="step"><span class="step-line"></span><span class="step-num">2</span><div><div class="step-title">完成一个完整项目</div><div class="step-sub">图像分类实战，产出可写进简历的项目，预计 3 周</div></div></div>
+            <div class="step"><span class="step-line"></span><span class="step-num">3</span><div><div class="step-title">工程化与面试准备</div><div class="step-sub">模型部署、推理优化与高频面试题，预计 1 周</div></div></div>
+          </div>
+
+          <div class="section-head"><h3>其他适配岗位</h3><span class="muted">按匹配度排序</span></div>
+          <div class="job-cards">
+            <div class="job-card" data-toast="已切换目标岗位：数据分析师"><b>数据分析师</b><span>匹配 3 项核心技能</span><div class="job-score">78</div></div>
+            <div class="job-card" data-toast="已切换目标岗位：机器学习工程师"><b>机器学习工程师</b><span>技术栈高度重合</span><div class="job-score">74</div></div>
+            <div class="job-card" data-toast="已切换目标岗位：数据产品经理"><b>数据产品经理</b><span>需补充产品能力</span><div class="job-score">66</div></div>
+          </div>
+          <div class="mt16"><button class="btn btn-primary btn-block" data-go="plan">加入我的学习计划</button></div>
+        </div>
+      </section>
+
+      <!-- ===== 11. 知识图谱 ===== -->
+      <section class="page" id="page-kg">
+        <div class="topbar">
+          <button class="icon-btn" data-back><svg><use href="#i-back"/></svg></button>
+          <h2>知识图谱</h2>
+          <button class="icon-btn" data-toast="已切换到全屏图谱模式"><svg><use href="#i-compass"/></svg></button>
+        </div>
+
+        <div class="kg-summary">
+          <div class="card"><b>68</b><span>知识节点</span></div>
+          <div class="card"><b>42</b><span>已掌握</span></div>
+          <div class="card"><b>62%</b><span>整体覆盖率</span></div>
+        </div>
+
+        <div class="kg-canvas">
+          <svg viewBox="0 0 350 360">
+            <defs>
+              <linearGradient id="kgGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#6d28d9"/>
+              </linearGradient>
+            </defs>
+            <line class="kg-edge" x1="175" y1="180" x2="90" y2="95"/>
+            <line class="kg-edge" x1="175" y1="180" x2="262" y2="95"/>
+            <line class="kg-edge" x1="175" y1="180" x2="70" y2="265"/>
+            <line class="kg-edge" x1="175" y1="180" x2="280" y2="265"/>
+            <line class="kg-edge" x1="90" y1="95" x2="38" y2="175"/>
+            <line class="kg-edge" x1="90" y1="95" x2="90" y2="38"/>
+            <line class="kg-edge" x1="262" y1="95" x2="286" y2="38"/>
+            <line class="kg-edge" x1="280" y1="265" x2="320" y2="170"/>
+            <g class="kg-node core sel" data-title="机器学习" data-desc="你正在学习的中心主题，已覆盖 68 个知识节点，掌握 42 个。继续按学习路径推进，预计 3 周可完成本章。" data-status="中心主题 · 已掌握 42 个节点">
+              <circle cx="175" cy="180" r="31"/><text x="175" y="180">机器学习</text>
+            </g>
+            <g class="kg-node done" data-title="监督学习" data-desc="包含分类与回归两大类任务，你已掌握线性回归、逻辑回归与决策树的核心思想。" data-status="已掌握 · 12 个知识点">
+              <circle cx="90" cy="95" r="23"/><text x="90" y="95">监督学习</text>
+            </g>
+            <g class="kg-node done" data-title="无监督学习" data-desc="主要包含聚类与降维。K-Means 已掌握，PCA 仍有一个知识点待巩固。" data-status="学习中 · 掌握 70%">
+              <circle cx="262" cy="95" r="23"/><text x="262" y="95">无监督学习</text>
+            </g>
+            <g class="kg-node learning" data-title="特征工程" data-desc="数据清洗、特征编码与选择。你在这部分练习正确率为 68%，建议重点复习特征选择方法。" data-status="学习中 · 掌握 58%">
+              <circle cx="70" cy="265" r="22"/><text x="70" y="265">特征工程</text>
+            </g>
+            <g class="kg-node done" data-title="模型评估" data-desc="交叉验证、混淆矩阵与常用指标。你在类别不均衡场景的指标选择上还有一次错题。" data-status="已掌握 · 8 个知识点">
+              <circle cx="280" cy="265" r="22"/><text x="280" y="265">模型评估</text>
+            </g>
+            <g class="kg-node done" data-title="决策树" data-desc="当前学习重点。信息熵与信息增益已掌握，剪枝策略尚未完成。" data-status="学习中 · 掌握 82%">
+              <circle cx="38" cy="175" r="19"/><text x="38" y="175">决策树</text>
+            </g>
+            <g class="kg-node locked" data-title="随机森林" data-desc="集成学习的入门模型，完成决策树与集成学习章节后自动解锁。" data-status="未解锁 · 前置：集成学习">
+              <circle cx="90" cy="38" r="21"/><text x="90" y="38">随机森林</text>
+            </g>
+            <g class="kg-node locked" data-title="聚类" data-desc="K-Means、层次聚类与 DBSCAN，属于无监督学习分支。" data-status="未解锁 · 前置：无监督学习">
+              <circle cx="286" cy="38" r="19"/><text x="286" y="38">聚类</text>
+            </g>
+            <g class="kg-node learning" data-title="交叉验证" data-desc="K 折交叉验证与留一法，属于模型评估的实践方法。" data-status="学习中 · 掌握 45%">
+              <circle cx="320" cy="170" r="21"/><text x="320" y="170">交叉验证</text>
+            </g>
+          </svg>
+        </div>
+
+        <div class="kg-legend">
+          <span><i class="kg-dot" style="background:#dbeafe"></i>已掌握</span>
+          <span><i class="kg-dot" style="background:#fef3c7"></i>学习中</span>
+          <span><i class="kg-dot" style="background:#f1f5f9;border:1px solid #e2e8f0"></i>未解锁</span>
+        </div>
+
+        <div class="card kg-info">
+          <div class="kg-info-head"><span class="kg-badge" id="kg-status">中心主题 · 已掌握 42 个节点</span><span class="muted">点击节点查看</span></div>
+          <div class="kg-title" id="kg-title">机器学习</div>
+          <p class="kg-desc" id="kg-desc">你正在学习的中心主题，已覆盖 68 个知识节点，掌握 42 个。继续按学习路径推进，预计 3 周可完成本章。</p>
+        </div>
+        <button class="btn btn-primary btn-block kg-cta" data-toast="AI 已生成 4 个待补知识点的学习顺序"><svg><use href="#i-sparkles"/></svg> 让 AI 规划补全顺序</button>
+      </section>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item" data-tab="home"><svg><use href="#i-home"/></svg><span>首页</span></button>
+      <button class="nav-item" data-tab="plan"><svg><use href="#i-book"/></svg><span>学习</span></button>
+      <button class="nav-ai" data-tab="chat" aria-label="AI 学习助手"><svg><use href="#i-sparkles"/></svg></button>
+      <button class="nav-item" data-tab="resources"><svg><use href="#i-layers"/></svg><span>资源</span></button>
+      <button class="nav-item" data-tab="profile"><svg><use href="#i-user"/></svg><span>我的</span></button>
+    </nav>
+
+    <div class="overlay" id="sheet-overlay"></div>
+    <div class="sheet" id="sheet-plan">
+      <div class="sheet-handle"></div>
+      <h3>让 AI 生成学习计划</h3>
+      <p>告诉我你的目标和可投入时间，AI 会拆解成阶段任务并填入学习路径。</p>
+      <textarea id="plan-input" placeholder="例如：3 个月内达到算法岗实习要求，每周可投入 8 小时，周末能学 4 小时。"></textarea>
+      <div class="chips">
+        <button class="chip">考研冲刺</button>
+        <button class="chip">转行就业</button>
+        <button class="chip">面试准备</button>
+        <button class="chip">每周 8 小时</button>
+      </div>
+      <button class="btn btn-primary btn-block mt12" id="generate-plan"><svg><use href="#i-sparkles"/></svg> 生成学习计划</button>
+    </div>
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<aside class="proto">
+  <div class="proto-brand"><span class="proto-logo"><svg><use href="#i-sparkles"/></svg></span><div><h2>智学方舟</h2><div class="sub">移动端可点击原型 · 11 页</div></div></div>
+  <div class="proto-group">主导航</div>
+  <button class="proto-link" data-jump="home"><span class="proto-num">1</span>首页 · 今日学习</button>
+  <button class="proto-link" data-jump="plan"><span class="proto-num">2</span>学习 · 路径与错题</button>
+  <button class="proto-link" data-jump="chat"><span class="proto-num">3</span>AI 学习助手</button>
+  <button class="proto-link" data-jump="resources"><span class="proto-num">4</span>资源库</button>
+  <button class="proto-link" data-jump="profile"><span class="proto-num">5</span>我的</button>
+  <div class="proto-group">二级页面</div>
+  <button class="proto-link" data-jump="course"><span class="proto-num">6</span>课程详情</button>
+  <button class="proto-link" data-jump="quiz"><span class="proto-num">7</span>随堂练习</button>
+  <button class="proto-link" data-jump="quiz-result"><span class="proto-num">8</span>练习报告</button>
+  <button class="proto-link" data-jump="career"><span class="proto-num">9</span>能力诊断</button>
+  <button class="proto-link" data-jump="kg"><span class="proto-num">10</span>知识图谱</button>
+  <button class="proto-link" data-jump="report"><span class="proto-num">11</span>学习报告</button>
+  <div class="proto-tip">点击手机内元素即可跳转；练习、AI 对话、能力诊断、知识图谱均可交互。</div>
+</aside>
+<script>
+(function(){
+  'use strict';
+  var MAIN = ['home','plan','chat','resources','profile'];
+  var stack = ['home'];
+  var $ = function(s,r){ return (r||document).querySelector(s); };
+  var $$ = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
+  var pageOf = function(id){ return document.getElementById('page-'+id); };
+
+  /* ---------- 路由 ---------- */
+  function render(){
+    var id = stack[stack.length-1];
+    $$('.page').forEach(function(p){ p.classList.toggle('active', p.id === 'page-'+id); });
+    $('.screen').classList.toggle('no-nav', MAIN.indexOf(id) === -1);
+    $$('.nav-item').forEach(function(n){ n.classList.toggle('active', n.dataset.tab === id); });
+    $$('.proto-link').forEach(function(n){ n.classList.toggle('active', n.dataset.jump === id); });
+    var p = pageOf(id);
+    if(p){
+      p.scrollTop = 0;
+      var cs = p.querySelector('.chat-scroll');
+      if(cs) cs.scrollTop = cs.scrollHeight;
+    }
+    if(id === 'quiz' && !quizStarted){ quizStarted = true; startQuiz(); }
+  }
+  function go(id, push){
+    if(stack[stack.length-1] === id) return;
+    if(push === false){ stack[stack.length-1] = id; }
+    else { stack.push(id); }
+    render();
+  }
+  function tab(id){ stack = [id]; render(); }
+  function back(){ if(stack.length > 1){ stack.pop(); render(); } }
+  function jump(id){
+    stack = MAIN.indexOf(id) > -1 ? [id] : ['home', id];
+    render();
+  }
+
+  document.addEventListener('click', function(e){
+    var t = e.target.closest('[data-go],[data-tab],[data-back],[data-sheet],[data-toast],[data-jump]');
+    if(!t) return;
+    if('back' in t.dataset){ back(); return; }
+    if(t.dataset.tab){ tab(t.dataset.tab); return; }
+    if(t.dataset.go){ go(t.dataset.go); return; }
+    if(t.dataset.sheet){ openSheet(t.dataset.sheet); return; }
+    if(t.dataset.toast){ toast(t.dataset.toast); return; }
+    if(t.dataset.jump){ jump(t.dataset.jump); }
+  });
+
+  /* ---------- 提示与弹层 ---------- */
+  var toastTimer;
+  function toast(msg){
+    var el = $('#toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ el.classList.remove('show'); }, 2000);
+  }
+  function openSheet(name){
+    var s = document.getElementById('sheet-'+name);
+    if(!s) return;
+    s.classList.add('show');
+    $('#sheet-overlay').classList.add('show');
+  }
+  function closeSheets(){
+    $$('.sheet').forEach(function(s){ s.classList.remove('show'); });
+    $('#sheet-overlay').classList.remove('show');
+  }
+  $('#sheet-overlay').addEventListener('click', closeSheets);
+  $('#generate-plan').addEventListener('click', function(){
+    var v = $('#plan-input').value.trim();
+    closeSheets();
+    toast(v ? 'AI 正在根据你的目标生成学习计划…' : '已按当前目标生成 8 周学习计划');
+    $('#plan-input').value = '';
+    setTimeout(function(){ toast('学习计划已更新：新增 3 个阶段任务'); }, 1700);
+  });
+  $$('#sheet-plan .chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      var input = $('#plan-input');
+      input.value = input.value ? input.value + '，' + c.textContent : c.textContent;
+    });
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape'){
+      if($('#sheet-plan').classList.contains('show')){ closeSheets(); }
+      else { back(); }
+    }
+  });
+
+  /* ---------- 首页任务 ---------- */
+  $$('#page-home .task .tick').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var task = btn.closest('.task');
+      task.classList.toggle('done');
+      btn.classList.toggle('done');
+      var total = $$('#page-home .task').length;
+      var done = $$('#page-home .task.done').length;
+      $('#task-count').textContent = done + '/' + total + ' 已完成';
+    });
+  });
+
+  /* ---------- 学习页分段 ---------- */
+  $$('#plan-seg button').forEach(function(b){
+    b.addEventListener('click', function(){
+      $$('#plan-seg button').forEach(function(x){ x.classList.remove('active'); });
+      b.classList.add('active');
+      $$('.plan-panel').forEach(function(p){ p.classList.toggle('show', p.dataset.panel === b.dataset.panel); });
+    });
+  });
+
+  /* ---------- 资源筛选 ---------- */
+  function applyResFilter(){
+    var type = $('#res-chips .chip.active').dataset.type;
+    var q = $('#res-search').value.trim().toLowerCase();
+    $$('#res-list .res').forEach(function(r){
+      var okType = type === 'all' || r.dataset.type === type;
+      var okText = !q || r.textContent.toLowerCase().indexOf(q) > -1;
+      r.style.display = okType && okText ? '' : 'none';
+    });
+  }
+  $$('#res-chips .chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      $$('#res-chips .chip').forEach(function(x){ x.classList.remove('active'); });
+      c.classList.add('active');
+      applyResFilter();
+    });
+  });
+  $('#res-search').addEventListener('input', applyResFilter);
+
+  /* ---------- AI 对话 ---------- */
+  var chatScroll = $('#chat-scroll');
+  var chatInput = $('#chat-input');
+  var replies = [
+    '<p>可以。我先用一句话概括：<b>随机森林 = 很多棵决策树的投票结果</b>。</p><p>它会从样本和特征两个维度做随机抽样，降低单棵树过拟合的风险，因此通常比单棵决策树更稳。</p><div class="bubble-actions"><button data-go="quiz">练 2 道相关题</button><button data-go="kg">在知识图谱中查看</button></div>',
+    '<p>我根据你最近 3 次练习的错题，整理出了 3 个薄弱点：</p><ul><li>剪枝策略：正确率 41%</li><li>基尼系数：正确率 68%</li><li>类别不均衡指标：正确率 58%</li></ul><p>建议先完成「剪枝」专项练习。</p><div class="bubble-actions"><button data-go="quiz">开始专项练习</button></div>',
+    '<p>已经记下了。我会在今晚 20:00 提醒你复习，并根据你的完成情况自动调整明天的学习任务。</p><div class="bubble-actions"><button data-toast="提醒已开启">查看提醒设置</button></div>'
+  ];
+  var replyIndex = 0;
+  function escapeHtml(s){
+    return s.replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function appendMsg(html, who){
+    var wrap = document.createElement('div');
+    wrap.className = 'msg ' + who;
+    wrap.innerHTML = '<div class="bubble">' + html + '</div>';
+    chatScroll.appendChild(wrap);
+  }
+  $('#chat-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var text = chatInput.value.trim();
+    if(!text) return;
+    appendMsg(escapeHtml(text), 'me');
+    chatInput.value = '';
+    var typing = document.createElement('div');
+    typing.className = 'msg ai';
+    typing.innerHTML = '<div class="bubble typing"><span></span><span></span><span></span></div>';
+    chatScroll.appendChild(typing);
+    chatScroll.scrollTop = chatScroll.scrollHeight;
+    setTimeout(function(){
+      typing.remove();
+      appendMsg(replies[replyIndex % replies.length], 'ai');
+      replyIndex++;
+      chatScroll.scrollTop = chatScroll.scrollHeight;
+    }, 1000);
+  });
+  $$('.chat-quick .chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      chatInput.value = c.textContent.trim();
+      chatInput.focus();
+    });
+  });
+
+  /* ---------- 报告分段 ---------- */
+  $$('#report-seg button').forEach(function(b){
+    b.addEventListener('click', function(){
+      $$('#report-seg button').forEach(function(x){ x.classList.remove('active'); });
+      b.classList.add('active');
+      toast('已切换为「' + b.textContent + '」数据');
+    });
+  });
+
+  /* ---------- 能力诊断 ---------- */
+  $$('#job-chips .chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      $$('#job-chips .chip').forEach(function(x){ x.classList.remove('active'); });
+      c.classList.add('active');
+      $('#diag-job-label').textContent = c.textContent;
+    });
+  });
+  $('#diagnose-btn').addEventListener('click', function(){
+    var btn = this;
+    if(btn.dataset.busy) return;
+    btn.dataset.busy = '1';
+    btn.disabled = true;
+    btn.innerHTML = '<svg><use href="#i-sparkles"/></svg> 正在分析能力画像…';
+    setTimeout(function(){
+      btn.disabled = false;
+      delete btn.dataset.busy;
+      btn.innerHTML = '<svg><use href="#i-target"/></svg> 重新诊断';
+      var res = $('#diagnose-result');
+      res.classList.add('show');
+      toast('诊断完成，已生成匹配报告与学习路径');
+      var p = pageOf('career');
+      p.scrollTo({ top: res.offsetTop - 58, behavior: 'smooth' });
+    }, 1300);
+  });
+
+  /* ---------- 知识图谱 ---------- */
+  $$('.kg-node').forEach(function(n){
+    n.addEventListener('click', function(){
+      $$('.kg-node').forEach(function(x){ x.classList.remove('sel'); });
+      n.classList.add('sel');
+      $('#kg-title').textContent = n.dataset.title;
+      $('#kg-desc').textContent = n.dataset.desc;
+      var badge = $('#kg-status');
+      badge.textContent = n.dataset.status;
+      if(n.classList.contains('locked')){
+        badge.style.background = '#f1f5f9'; badge.style.color = '#64748b';
+      } else if(n.classList.contains('learning')){
+        badge.style.background = '#fff7e8'; badge.style.color = '#b45309';
+      } else {
+        badge.style.background = '#e8fbf3'; badge.style.color = '#047857';
+      }
+    });
+  });
+
+  /* ---------- 练习测验 ---------- */
+  var QUIZ = [
+    { tag:'机器学习 · 决策树', q:'下列关于“信息增益”的说法，正确的是？',
+      options:['信息增益越大，说明该特征的分裂能力越弱','信息增益等于分裂前的信息熵减去分裂后的条件熵','信息增益只能用于回归问题','信息增益与特征的取值个数无关'],
+      answer:1, explain:'信息增益 = 父节点信息熵 − 子节点加权信息熵。增益越大，说明用该特征划分后不确定性下降越多，分裂能力越强。' },
+    { tag:'机器学习 · 决策树', q:'决策树容易过拟合，下列哪种做法不能有效缓解？',
+      options:['限制树的最大深度','增大叶节点的最小样本数','使用后剪枝','不断增加特征并让树完全生长'],
+      answer:3, explain:'完全生长并不断引入特征会加剧过拟合。限制深度、提高叶节点最小样本数、剪枝都是常用的正则化手段。' },
+    { tag:'机器学习 · 模型评估', q:'在类别极不均衡的数据上，最适合作为主要评价指标的是？',
+      options:['准确率 Accuracy','F1 分数 / AUC','均方误差 MSE','决定系数 R²'],
+      answer:1, explain:'不均衡数据下准确率会被多数类主导。F1、AUC 等指标能更好地反映少数类的识别效果。' }
+  ];
+  var qi = 0, answered = false, correct = 0, startedAt = Date.now(), quizStarted = false;
+  function fmt(sec){
+    var m = Math.floor(sec/60), s = sec%60;
+    return (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+  }
+  function renderQuiz(){
+    answered = false;
+    var q = QUIZ[qi];
+    $('#quiz-tag').textContent = q.tag;
+    $('#quiz-q').textContent = q.q;
+    $('#quiz-index').textContent = '第 ' + (qi+1) + ' / ' + QUIZ.length + ' 题';
+    $('#quiz-progress').style.width = (qi / QUIZ.length * 100) + '%';
+    var box = $('#quiz-options');
+    box.innerHTML = '';
+    q.options.forEach(function(opt, i){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'option';
+      b.innerHTML = '<span class="tag">' + 'ABCD'[i] + '</span><span>' + opt + '</span>';
+      b.addEventListener('click', function(){ choose(i, b); });
+      box.appendChild(b);
+    });
+    $('#quiz-explain').classList.remove('show');
+    $('#quiz-explain').innerHTML = '';
+    $('#quiz-next').classList.add('hide');
+    $('#quiz-next').textContent = qi === QUIZ.length - 1 ? '查看练习报告' : '下一题';
+    pageOf('quiz').scrollTop = 0;
+  }
+  function choose(i, btn){
+    if(answered) return;
+    answered = true;
+    var q = QUIZ[qi];
+    var opts = $$('#quiz-options .option');
+    opts[q.answer].classList.add('correct');
+    if(i === q.answer){ correct++; }
+    else {
+      btn.classList.add('wrong');
+      opts.forEach(function(o, idx){ if(idx !== i && idx !== q.answer) o.classList.add('dim'); });
+    }
+    var head = i === q.answer ? '回答正确' : '正确答案：' + 'ABCD'[q.answer];
+    $('#quiz-explain').innerHTML = '<div class="explain-head">' + head + '</div><p>' + q.explain + '</p>';
+    $('#quiz-explain').classList.add('show');
+    $('#quiz-next').classList.remove('hide');
+    $('#quiz-progress').style.width = ((qi + 1) / QUIZ.length * 100) + '%';
+  }
+  function startQuiz(){
+    qi = 0; correct = 0; startedAt = Date.now();
+    $('#quiz-timer').textContent = '00:00';
+    renderQuiz();
+  }
+  function finishQuiz(){
+    var secs = Math.max(30, Math.round((Date.now() - startedAt) / 1000));
+    var score = Math.round(correct / QUIZ.length * 100);
+    var ring = $('#result-ring');
+    ring.style.setProperty('--score', score);
+    $('#result-score').textContent = score;
+    $('#result-correct').textContent = correct;
+    $('#result-time').textContent = fmt(secs);
+    $('#result-rate').textContent = score + '%';
+    $('#result-sub').textContent = '本次共 ' + QUIZ.length + ' 题，答对 ' + correct + ' 题';
+    $('#result-title').textContent = score === 100 ? '完美掌握，继续保持' : (score >= 60 ? '继续保持，就差一点点' : '基础还不够稳，建议复习后再练');
+    go('quiz-result');
+  }
+  $('#quiz-next').addEventListener('click', function(){
+    if(qi < QUIZ.length - 1){ qi++; renderQuiz(); }
+    else { finishQuiz(); }
+  });
+  $('#retry-quiz').addEventListener('click', function(){
+    quizStarted = true;
+    startQuiz();
+    go('quiz', false);
+  });
+  setInterval(function(){
+    if(stack[stack.length-1] === 'quiz'){
+      $('#quiz-timer').textContent = fmt(Math.floor((Date.now() - startedAt) / 1000));
+    }
+  }, 500);
+
+  render();
+})();
+</script>
+</body>
+</html>
