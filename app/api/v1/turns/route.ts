@@ -8,6 +8,7 @@
  */
 
 import { NextRequest } from 'next/server';
+import prisma from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
 import { StreamBusImpl } from '@/lib/deeptutor/core/stream-bus';
 import type { StreamEvent, Attachment } from '@/lib/deeptutor/core/types';
@@ -73,6 +74,7 @@ export async function POST(req: NextRequest) {
     apiKey,
     baseUrl,
     conversationHistory,
+    regenerateMessageId,
   } = body;
 
   // --- Resolve user identity (placeholder — replace with real auth in Phase 1.2) ---
@@ -110,6 +112,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const regenerateId = regenerateMessageId ? Number(regenerateMessageId) : null;
+  if (regenerateId && !await prisma.dtMessage.findFirst({ where: { id: regenerateId, userId, sessionId, role: 'assistant' } })) {
+    return new Response(JSON.stringify({ error: 'Message not found' }), { status: 404 });
+  }
   const turnId = await createTurn(sessionId, { capability });
   log.info(`Turn ${turnId} created for session ${sessionId}`);
 
@@ -162,6 +168,7 @@ export async function POST(req: NextRequest) {
 
   // --- Build SSE ReadableStream ---
   let assistantContent = '';
+  const assistantMetadata: Record<string, unknown> = {};
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -177,12 +184,14 @@ export async function POST(req: NextRequest) {
         if (event.type === 'content' && event.content) {
           assistantContent += event.content;
         }
+        if (event.type === 'result' && typeof event.metadata?.text === 'string' && !assistantContent) assistantContent = event.metadata.text;
+        if (event.metadata?.renderMode) assistantMetadata.renderMode = event.metadata.renderMode;
         push(event);
       };
 
       try {
         // Persist user message
-        await addMessage(sessionId, userId, 'user', message, {
+        if (!regenerateId) await addMessage(sessionId, userId, 'user', message, {
           capability: capability ?? undefined,
           turnId,
           attachments: attachments as Record<string, unknown>[] | undefined,
@@ -218,9 +227,17 @@ export async function POST(req: NextRequest) {
 
         // Persist assistant message
         if (assistantContent) {
-          await addMessage(sessionId, userId, 'assistant', assistantContent, {
+          if (regenerateId) {
+            await prisma.$transaction(async tx => {
+              const session = await tx.dtSession.updateMany({ where: { id: sessionId, userId, deletedAt: null }, data: { updatedAt: new Date() } });
+              if (!session.count) throw new Error('Session deleted');
+              const changed = await tx.dtMessage.updateMany({ where: { id: regenerateId, userId, sessionId }, data: { content: assistantContent, turnId, metadata: JSON.parse(JSON.stringify(assistantMetadata)) } });
+              if (!changed.count) throw new Error('Message deleted');
+            });
+          } else await addMessage(sessionId, userId, 'assistant', assistantContent, {
             capability: capability ?? undefined,
             turnId,
+            metadata: assistantMetadata,
           });
 
           // Emit L1 trace for assistant response (fire-and-forget)

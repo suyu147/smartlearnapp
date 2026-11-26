@@ -233,13 +233,9 @@ export const useResourceDecisionsStore = create<ResourceDecisionsState>()(
       },
     }),
     {
-      name: 'resource-decisions-storage',
+      name: 'resource-decisions-cloud-v1',
       version: 2,
-      partialize: (state) => ({
-        logsBySession: state.logsBySession,
-        overridesBySession: state.overridesBySession,
-        feedbackBySession: state.feedbackBySession,
-      }),
+      partialize: () => ({}),
     },
   ),
 );

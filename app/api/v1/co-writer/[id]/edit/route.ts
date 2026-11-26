@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { HistoryConflict } from '@/lib/history/server';
 import { apiSuccess, apiError } from '@/lib/server/api-response';
 import { getEditAgent, getOperationHistory } from '@/lib/deeptutor/bootstrap';
 import { CowriterDbService } from '@/lib/deeptutor/services/cowriter-db-service';
@@ -22,7 +23,7 @@ export async function POST(request: NextRequest, { params }: Params) {
   const { id: docId } = await params;
   return withAuth(request, async (req, { user }) => {
     try {
-      const { text, instruction, action, source, kbName, language } =
+      const { text, instruction, action, source, kbName, language, expectedVersion } =
         await validatedBody(CoWriterEditSchema, req);
 
       // Verify document ownership
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest, { params }: Params) {
         return apiError('Document not found', 404, 'NOT_FOUND');
       }
 
+      if (expectedVersion !== existingDoc.version) return apiError("文档已在其他设备更新，请刷新", 409);
       const agent = getEditAgent();
       const result = await agent.edit({
         text,
@@ -42,27 +44,20 @@ export async function POST(request: NextRequest, { params }: Params) {
         language,
       });
 
-      // Record operation in history (global, since it's anonymous edit operations)
-      const history = getOperationHistory();
-      await history.add({
-        id: result.operationId,
-        action,
-        instruction: instruction || '',
-        originalLength: text.length,
-        editedLength: result.editedText.length,
-        timestamp: new Date().toISOString(),
-      });
-
-      // Update the document with edited text
-      if (docId && result.editedText && !result.editedText.startsWith('[')) {
-        await db.updateDocument(docId, { content: result.editedText });
+      let savedDoc = existingDoc;
+      if (result.editedText && !result.editedText.startsWith('[')) {
+        const metadata = existingDoc.metadata ?? {};
+        const operations = Array.isArray(metadata.operations) ? metadata.operations : [];
+        savedDoc = await db.updateDocument(docId, { content: result.editedText, metadata: { ...metadata, operations: [...operations, { id: result.operationId, action, instruction, originalLength: text.length, editedLength: result.editedText.length, timestamp: new Date().toISOString() }] } }, existingDoc.version) ?? existingDoc;
       }
 
       return apiSuccess({
         editedText: result.editedText,
         operationId: result.operationId,
+        version: savedDoc.version,
       });
     } catch (err) {
+      if (err instanceof HistoryConflict) return apiError(err.message, 409);
       if (isValidationError(err) || isSyntaxError(err)) {
         return apiError(errorToMessage(err), 400);
       }

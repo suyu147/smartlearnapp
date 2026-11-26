@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRefreshOnFocus } from '@/lib/hooks/use-refresh-on-focus';
 import {
   Plus,
   FileText,
@@ -95,6 +96,16 @@ export default function NotebookPage() {
     }
   };
 
+  useRefreshOnFocus(async () => {
+    const list = await apiGet<Notebook[]>('/api/v1/notebook');
+    setNotebooks(list);
+    if (selectedNotebook && list.some(notebook => notebook.id === selectedNotebook)) {
+      const data = await apiGet<{ records: NoteRecord[] }>(`/api/v1/notebook/${selectedNotebook}`);
+      setNotes(data.records);
+      setSelectedNote(previous => data.records.find(record => record.id === previous?.id) ?? null);
+    } else { setSelectedNotebook(null); setNotes([]); setSelectedNote(null); }
+  }, !editing && !saving && !creating);
+
   // Create notebook
   const handleCreateNotebook = async () => {
     if (!newTitle.trim()) return;
@@ -168,9 +179,9 @@ export default function NotebookPage() {
           ),
         );
       } else {
-        // Update existing note — currently PUT creates a new record as the API doesn't support update yet.
-        // For now, create a new record and replace the old one in local state.
         const record = await apiPut<NoteRecord>(`/api/v1/notebook/${selectedNotebook}`, {
+          recordId: selectedNote.id,
+          expectedUpdatedAt: selectedNote.updatedAt,
           title: editTitle,
           content: editContent,
         });

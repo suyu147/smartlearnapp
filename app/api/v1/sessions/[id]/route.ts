@@ -1,117 +1,36 @@
-/**
- * GET    /api/v1/sessions/[id] — Get session by ID
- * PUT    /api/v1/sessions/[id] — Update session title
- * DELETE /api/v1/sessions/[id] — Delete session
- */
-
-import { NextRequest } from 'next/server';
-import { createLogger } from '@/lib/logger';
-import {
-  getSession,
-  updateSessionTitle,
-  deleteSession,
-  getMessages,
-  listTurns,
-} from '@/lib/deeptutor/services/session';
-
-const log = createLogger('SessionDetailRoute');
-
-function apiError(err: unknown, fallbackStatus: number = 500) {
-  const message = err instanceof Error ? err.message : 'Unknown error';
-  log.error('error', err);
-  return new Response(JSON.stringify({ error: message }), {
-    status: fallbackStatus,
-    headers: { 'Content-Type': 'application/json' },
+import { NextRequest, NextResponse } from 'next/server';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import prisma from '@/lib/utils/database';
+import { z } from 'zod';
+type Params = { params: Promise<{ id: string }> };
+const missing = () => NextResponse.json({ error: 'Session not found' }, { status: 404 });
+export async function GET(req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  return withAuth(req, async (_, { user }) => {
+    const session = await prisma.dtSession.findFirst({ where: { id, userId: user.id, deletedAt: null } });
+    if (!session) return missing();
+    const limit = Math.min(200, Math.max(1, Number(req.nextUrl.searchParams.get('limit')) || 100));
+    const before = Number(req.nextUrl.searchParams.get('before')) || undefined;
+    const messages = req.nextUrl.searchParams.get('messages') === 'false' ? [] : await prisma.dtMessage.findMany({ where: { sessionId: id, userId: user.id, ...(before ? { id: { lt: before } } : {}) }, orderBy: { id: 'desc' }, take: limit + 1 });
+    const hasMore = messages.length > limit;
+    const page = messages.slice(0, limit).reverse();
+    return NextResponse.json({ success: true, data: { session, messages: page, hasMore, nextBefore: hasMore ? page[0]?.id : null } });
   });
 }
-
-export async function GET(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  try {
-    const { id } = await params;
-    const session = await getSession(id);
-    if (!session) {
-      return new Response(JSON.stringify({ error: 'Session not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    const url = new URL(req.url);
-    const includeMessages = url.searchParams.get('messages') !== 'false';
-    const includeTurns = url.searchParams.get('turns') === 'true';
-
-    const result: Record<string, unknown> = { session };
-
-    if (includeMessages) {
-      const limit = url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : 100;
-      result.messages = await getMessages(id, { limit });
-    }
-    if (includeTurns) {
-      result.turns = await listTurns(id);
-    }
-
-    return new Response(JSON.stringify({ success: true, data: result }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    log.error('GET /api/v1/sessions/[id] failed:', err);
-    return apiError(err);
-  }
+export async function PUT(req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  return withAuth(req, async (_, { user }) => {
+    const body = z.object({ title: z.string().trim().min(1).max(500), expectedRevision: z.number().int().nonnegative() }).safeParse(await req.json());
+    if (!body.success) return NextResponse.json({ error: 'title and expectedRevision required' }, { status: 400 });
+    const result = await prisma.dtSession.updateMany({ where: { id, userId: user.id, deletedAt: null, revision: body.data.expectedRevision }, data: { title: body.data.title, revision: { increment: 1 } } });
+    if (!result.count) return NextResponse.json({ error: '会话已更新或删除，请刷新' }, { status: 409 });
+    return NextResponse.json({ success: true, data: { revision: body.data.expectedRevision + 1 } });
+  });
 }
-
-export async function PUT(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  try {
-    const { id } = await params;
-    const { validatedBody } = await import('@/lib/server/validate');
-    const { SessionUpdateSchema } = await import('@/lib/server/schemas');
-    const { title } = await validatedBody(SessionUpdateSchema, req);
-
-    const ok = await updateSessionTitle(id, title);
-    if (!ok) {
-      return new Response(JSON.stringify({ error: 'Session not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === 'ValidationError') {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    log.error('PUT /api/v1/sessions/[id] failed:', err);
-    return apiError(err);
-  }
-}
-
-export async function DELETE(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  try {
-    const { id } = await params;
-    const ok = await deleteSession(id);
-    if (!ok) {
-      return new Response(JSON.stringify({ error: 'Session not found' }), {
-        status: 404,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    log.error('DELETE /api/v1/sessions/[id] failed:', err);
-    return apiError(err);
-  }
+export async function DELETE(req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  return withAuth(req, async (_, { user }) => {
+    const result = await prisma.dtSession.updateMany({ where: { id, userId: user.id, mode: 'chat', deletedAt: null }, data: { deletedAt: new Date(), revision: { increment: 1 } } });
+    return result.count ? NextResponse.json({ success: true, data: { deleted: true } }) : missing();
+  });
 }

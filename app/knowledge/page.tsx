@@ -1,4 +1,5 @@
 'use client';
+import { useRefreshOnFocus } from '@/lib/hooks/use-refresh-on-focus';
 
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -89,6 +90,8 @@ export default function KnowledgePage() {
       setDetailsLoading(false);
     }
   }, []);
+
+  useRefreshOnFocus(async () => { await fetchKnowledgeBases(); if (selectedKB) await fetchKBDetails(selectedKB); }, !uploading && !creating);
 
   // Create KB
   const handleCreate = async () => {

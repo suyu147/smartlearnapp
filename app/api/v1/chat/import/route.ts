@@ -12,6 +12,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticate } from '@/lib/deeptutor/services/auth';
+import { ensureHistoryUser } from '@/lib/history/server';
+import prisma from '@/lib/utils/database';
+import { createHash } from 'node:crypto';
 import { createLogger } from '@/lib/logger';
 import { ChatImportService, type ImportFormat } from '@/lib/deeptutor/services/chat-import';
 
@@ -27,6 +31,7 @@ const VALID_FORMATS = new Set<ImportFormat>([
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
+    const user = await authenticate(request);
     const contentType = request.headers.get('content-type') ?? '';
     const chatImportService = new ChatImportService();
 
@@ -34,9 +39,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let content: string;
     let format: ImportFormat | undefined;
     let filename: string;
+    let confirm = false;
 
     if (contentType.includes('multipart/form-data')) {
       const formData = await request.formData();
+      confirm = formData.get('confirm') === 'true';
       const file = formData.get('file') as File | null;
       const formatParam = formData.get('format') as string | null;
 
@@ -54,7 +61,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         : undefined;
     } else {
       // JSON body
-      const body = await request.json() as { content?: string; format?: string; filename?: string };
+      const body = await request.json() as { content?: string; format?: string; filename?: string; confirm?: boolean };
 
       if (!body.content) {
         return NextResponse.json(
@@ -63,6 +70,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
       }
 
+      confirm = body.confirm === true;
       content = body.content;
       filename = body.filename ?? 'import.json';
       format = body.format && VALID_FORMATS.has(body.format as ImportFormat)
@@ -85,6 +93,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           },
         },
       );
+    }
+
+    if (confirm) {
+      await ensureHistoryUser(user.id);
+      for (const conversation of conversations) {
+        const id = `import-${createHash('sha256').update(`${user.id}:${conversation.id}:${JSON.stringify(conversation.messages)}`).digest('hex')}`;
+        if (await prisma.dtSession.findUnique({ where: { id } })) continue;
+        await prisma.dtSession.create({ data: { id, userId: user.id, title: conversation.title, mode: 'chat', metadata: { source: conversation.source, imported: true }, messages: { create: conversation.messages.filter(message => ['user', 'assistant', 'system', 'tool'].includes(message.role)).map(message => ({ userId: user.id, role: message.role as 'user' | 'assistant' | 'system' | 'tool', content: message.content })) } } });
+      }
     }
 
     // Count total messages

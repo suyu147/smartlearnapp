@@ -1,4 +1,5 @@
 'use client';
+import { useRefreshOnFocus } from '@/lib/hooks/use-refresh-on-focus';
 
 import { useState, useEffect } from 'react';
 import { Download, RefreshCw, Clock, Tag, Trash2, Loader2 } from 'lucide-react';
@@ -66,6 +67,8 @@ export default function MemoryPage() {
       cancelled = true;
     };
   }, []);
+
+  useRefreshOnFocus(() => useMemoryStore.getState().syncFromServer());
 
   // Filter entries by active layer
   const filteredEntries = entries.filter((e) => e.layer === activeLayer);
@@ -221,7 +224,8 @@ export default function MemoryPage() {
                         {entry.source ?? '对话'}
                       </span>
                       <button
-                        onClick={() => removeEntry(entry.id)}
+                        onClick={() => { void removeEntry(entry.id) }}
+                        title="删除"
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-[var(--destructive)]/10"
                       >
                         <Trash2 className="h-3 w-3 text-[var(--muted-foreground)] hover:text-[var(--destructive)]" />

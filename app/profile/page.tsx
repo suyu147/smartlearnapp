@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, RefreshCw } from 'lucide-react';
 import { ProfileCard } from '@/components/profile/profile-card';
+import { QuizHistory } from '@/components/quiz-history';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useLearningProfileStore } from '@/lib/store/learning-profile';
@@ -16,6 +17,9 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const versions = useLearningProfileStore(s => s.profileHistory);
+  const [selectedVersion, setSelectedVersion] = useState('current');
+  const viewedDimensions = selectedVersion === 'current' ? stored?.dimensions : versions[Number(selectedVersion)]?.dimensions;
   const profile = stored?.userId === userId ? stored : null;
   useEffect(() => {
     const controller = new AbortController();
@@ -29,7 +33,7 @@ export default function ProfilePage() {
         if (!response.ok) throw new Error('学习画像加载失败，请重试。');
         const { profile: p } = await response.json();
         if (controller.signal.aborted) return;
-        const result: LearningProfile = { id: p.id, userId: p.userId, version: p.version, dimensions: p.dimensions, updatedAt: p.updatedAt, conversationHistory: [] };
+        const result: LearningProfile = { id: p.id, userId: p.userId, version: p.version, dimensions: p.dimensions, updatedAt: p.updatedAt, conversationHistory: useLearningProfileStore.getState().profile?.conversationHistory ?? [] };
         useLearningProfileStore.getState().setProfile(result);
       } catch (err) { if (!controller.signal.aborted) setError(err instanceof Error ? err.message : '无法连接服务器。'); }
       finally { if (!controller.signal.aborted) setLoading(false); }
@@ -45,8 +49,10 @@ export default function ProfilePage() {
       <Button asChild variant="outline"><Link href="/smartlearn">开始智能学习<ArrowRight className="ml-1 h-4 w-4" /></Link></Button>
     </header>
     {error && <div role="alert" className="mb-5 rounded-lg border border-destructive/30 p-4 text-sm"><p>{error}</p><Button variant="ghost" className="mt-2" onClick={() => setRetry(v => v + 1)}><RefreshCw className="mr-1 h-4 w-4" />重试</Button></div>}
+    {versions.length > 0 && <label className="mb-5 flex items-center gap-3 text-sm">画像历史<select aria-label="画像历史" value={selectedVersion} onChange={event => setSelectedVersion(event.target.value)} className="rounded-lg border bg-background px-3 py-2"><option value="current">当前画像</option>{versions.map((version, index) => <option key={`${version.version}-${index}`} value={String(index)}>版本 {version.version} · {new Date(version.updatedAt).toLocaleString()}</option>)}</select></label>}
     {loading ? <div aria-busy="true" aria-label="正在加载学习画像" className="space-y-4 rounded-xl border border-border p-6">{[1, 2, 3, 4].map(v => <div key={v} className="h-16 animate-pulse rounded-lg bg-muted" />)}</div>
-      : profile && <ProfileCard dimensions={profile.dimensions} />}
+      : profile && <ProfileCard dimensions={viewedDimensions ?? profile.dimensions} />}
     {!loading && profile && <p className="mt-4 text-xs leading-6 text-muted-foreground">{profile.dimensions.onboarding?.finishedBy === 'skipped' ? '你选择了稍后完善，已有的有效信息已保留。' : '表单未确认的文字不会出现在画像中。'}</p>}
+    <QuizHistory />
   </main>;
 }

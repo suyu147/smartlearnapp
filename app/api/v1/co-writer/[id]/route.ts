@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { HistoryConflict } from '@/lib/history/server';
 import { apiSuccess, apiError } from '@/lib/server/api-response';
 import { CowriterDbService } from '@/lib/deeptutor/services/cowriter-db-service';
 import { validatedBody, errorToMessage, isValidationError, isSyntaxError } from '@/lib/server/validate';
@@ -52,10 +53,11 @@ export async function PUT(request: NextRequest, { params }: Params) {
         return apiError('Document not found', 404, 'NOT_FOUND');
       }
 
-      const { title, content } = await validatedBody(CoWriterUpdateSchema, req);
+      const { title, content, expectedVersion } = await validatedBody(CoWriterUpdateSchema, req);
+      if (!expectedVersion) return apiError("expectedVersion required", 428);
 
       const db = new CowriterDbService();
-      const doc = await db.updateDocument(docId, { title, content });
+      const doc = await db.updateDocument(docId, { title, content }, expectedVersion);
 
       if (!doc) {
         return apiError('Document not found', 404, 'NOT_FOUND');
@@ -63,6 +65,7 @@ export async function PUT(request: NextRequest, { params }: Params) {
 
       return apiSuccess(doc);
     } catch (err) {
+      if (err instanceof HistoryConflict) return apiError(err.message, 409);
       if (isValidationError(err) || isSyntaxError(err)) {
         return apiError(errorToMessage(err), 400);
       }

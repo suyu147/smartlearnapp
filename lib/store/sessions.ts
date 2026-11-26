@@ -10,6 +10,8 @@ export interface LearningSession {
   updatedAt: string;
   title: string;
   status: 'active' | 'completed' | 'paused';
+  cloudVersion?: 1;
+  serverRevision?: number;
 }
 
 export interface TutorChatMessage {
@@ -68,6 +70,8 @@ export const useSessionsStore = create<SessionsState>()(
           createdAt: now,
           updatedAt: now,
           status: 'active',
+          cloudVersion: 1,
+          serverRevision: 0,
         };
         set({
           sessions: [...updatedSessions, session],
@@ -157,6 +161,6 @@ export const useSessionsStore = create<SessionsState>()(
 
       getSessionsCount: () => get().sessions.length,
     }),
-    { name: 'learning-sessions-storage' },
+    { name: 'learning-sessions-cloud-v1', partialize: () => ({}) },
   )
 );

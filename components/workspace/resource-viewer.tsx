@@ -116,6 +116,7 @@ export function ResourceViewer({ resource, sessionId, nodeId, onQuizResult, onRe
         <QuizPlayer
           content={resource.content}
           title={resource.title}
+          sessionId={resource.sessionId ?? sessionId}
           onResult={(result) => onQuizResult?.(resource, result)}
         />
       )}

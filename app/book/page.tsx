@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   BookOpen,
   Plus,
@@ -28,6 +28,8 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { apiGet, apiDelete, apiFetch } from '@/lib/api-client'
+import { useRefreshOnFocus } from '@/lib/hooks/use-refresh-on-focus'
+import { toast } from 'sonner'
 import { useBookStore } from '@/lib/store/book-store'
 import { useSettingsStoreV2 } from '@/lib/store/settings-store'
 import { useI18n } from '@/lib/hooks/use-i18n'
@@ -47,10 +49,12 @@ interface BookSummary {
   pageCount: number
   createdAt: string
   updatedAt: string
+  revision: number
 }
 
 interface BookDetail {
   book: {
+    revision: number
     id: string
     status: string
     proposal: { title: string; description: string; scope: string; targetLevel: string; estimatedChapters: number; rationale: string } | null
@@ -157,6 +161,9 @@ export default function BookPage() {
   const [processStep, setProcessStep] = useState('')
   const [newIntent, setNewIntent] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const bookRef = useRef(activeBook)
+  bookRef.current = activeBook
+  const progressQueue = useRef<Promise<unknown>>(Promise.resolve())
 
   // ---------------------------------------------------------------------------
   // SmartLearn-aware API helpers (inject LLM config as headers)
@@ -171,9 +178,9 @@ export default function BookPage() {
     return apiFetch<T>(path, {
       method: 'POST',
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      headers: llmHeaders,
+      headers: { ...llmHeaders, ...(activeBook ? { 'x-book-revision': String(activeBook.book.revision) } : {}) },
     })
-  }, [llmHeaders['x-api-key'], llmHeaders['x-provider'], llmHeaders['x-model'], llmHeaders['x-base-url']])
+  }, [llmHeaders['x-api-key'], llmHeaders['x-provider'], llmHeaders['x-model'], llmHeaders['x-base-url'], activeBook?.book.revision])
 
   // ---------------------------------------------------------------------------
   // Fetch book list
@@ -200,14 +207,33 @@ export default function BookPage() {
     try {
       const detail = await apiGet<BookDetail>(`/api/v1/book/${id}`)
       setActiveBook(detail)
-      // Select first page
-      if (detail.pages.length > 0) {
-        setActivePageId(detail.pages[0].id)
-      }
-    } catch {
-      // error handled by UI state
+      setActivePageId(previous => detail.pages.some(page => page.id === previous) ? previous : detail.pages.find(page => page.id === detail.book.progress.currentPageId)?.id ?? detail.pages[0]?.id ?? null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '加载书籍失败')
+      setActiveBook(null)
     }
   }, [])
+
+  useRefreshOnFocus(async () => { await fetchBooks(); if (activeBook) await loadBook(activeBook.book.id); }, !processing && !creating)
+
+  const saveReadingProgress = (pageId: string, quiz?: { blockId: string; score: number; attemptId: string }) => {
+    const id = bookRef.current?.book.id
+    const task = progressQueue.current.catch(() => {}).then(async () => {
+      const current = bookRef.current
+      if (!current || current.book.id !== id) return
+      const result = await apiFetch<{ revision: number; progress: BookDetail['book']['progress'] }>('/api/v1/book/progress', { method: 'POST', headers: { 'x-book-revision': String(current.book.revision) }, body: JSON.stringify({ bookId: id, pageId, quiz }) })
+      if (bookRef.current?.book.id !== id) return
+      const next = { ...bookRef.current, book: { ...bookRef.current.book, revision: result.revision, progress: result.progress } }
+      bookRef.current = next
+      setActiveBook(next)
+    })
+    progressQueue.current = task
+    return task
+  }
+  useEffect(() => {
+    if (!activePageId || !activeBook || processing || activeBook.book.progress.currentPageId === activePageId) return
+    void saveReadingProgress(activePageId).catch(error => toast.error(error instanceof Error ? error.message : '保存阅读进度失败'))
+  }, [activePageId, activeBook?.book.id])
 
   // ---------------------------------------------------------------------------
   // Create book (Stage 1)
@@ -308,7 +334,7 @@ export default function BookPage() {
       e.stopPropagation()
       if (!confirm(t('book.confirmDelete'))) return
       try {
-        await apiDelete(`/api/v1/book/${id}`)
+        await apiFetch(`/api/v1/book/${id}`, { method: 'DELETE', headers: { 'x-book-revision': String(books.find(book => book.id === id)?.revision ?? 0) } })
         if (activeBook?.book.id === id) {
           setActiveBook(null)
           setActivePageId(null)
@@ -650,7 +676,7 @@ export default function BookPage() {
                                   proseClass="prose prose-sm dark:prose-invert max-w-none [&_pre]:m-0"
                                 />
                               ) : block.type === 'quiz' ? (
-                                <QuizCard quiz={{
+                                <QuizCard onResult={result => saveReadingProgress(activePage.id, { blockId: block.id, score: result.correct ? 1 : 0, attemptId: result.attemptId }).then(() => {})} quiz={{
                                   question: (block.payload.question as string) || '',
                                   options: Array.isArray(block.payload.options) ? (block.payload.options as string[]) : [],
                                   correctIndex: block.payload.correctIndex as number | undefined,

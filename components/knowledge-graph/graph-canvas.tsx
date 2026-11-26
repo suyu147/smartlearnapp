@@ -19,7 +19,7 @@ import type { SceneLink, SceneNode } from '@/lib/graph/types';
 import { cn } from '@/lib/utils';
 
 interface SimNode extends SceneNode, SimulationNodeDatum {}
-interface SimLink extends SceneLink, SimulationLinkDatum<SimNode> {}
+interface SimLink extends Omit<SceneLink, 'source' | 'target'>, SimulationLinkDatum<SimNode> {}
 
 export interface GraphCanvasProps {
   nodes: SceneNode[];
@@ -180,8 +180,8 @@ export function GraphCanvas({
     if (!selectedId) return new Set<string>();
     const set = new Set<string>();
     for (const link of simLinks) {
-      const s = typeof link.source === 'string' ? link.source : link.source.id;
-      const t = typeof link.target === 'string' ? link.target : link.target.id;
+      const s = typeof link.source === 'object' ? link.source.id : String(link.source);
+      const t = typeof link.target === 'object' ? link.target.id : String(link.target);
       if (s === selectedId) set.add(t);
       if (t === selectedId) set.add(s);
     }

@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 
 import { prisma } from '@/lib/db/client';
+import { HistoryConflict } from '@/lib/history/server';
 import { DEFAULT_DIMENSIONS, type ProfileDimensions } from '@/lib/types/profile';
 
 export interface SkillEntry {
@@ -186,13 +187,12 @@ export class LearnerProfileService {
     const current = await this.getProfile(userId);
     const merged = mergeDimensions({ ...current.dimensions, ...partial });
 
-    const updated = await prisma.learningProfile.update({
-      where: { userId },
-      data: {
-        dimensions: toJson(merged),
-        version: { increment: 1 },
-        lastSource: source ?? current.lastSource ?? undefined,
-      },
+    const updated = await prisma.$transaction(async tx => {
+      const changed = await tx.learningProfile.updateMany({ where: { userId, version: current.version }, data: { dimensions: toJson(merged), version: { increment: 1 }, lastSource: source ?? current.lastSource ?? undefined } });
+      if (!changed.count) throw new HistoryConflict('画像已在其他设备更新，请刷新');
+      const record = await tx.learningProfile.findUniqueOrThrow({ where: { userId } });
+      await tx.userHistoryDocument.create({ data: { userId, key: `profile-version:${record.version}:${crypto.randomUUID()}`, payload: toJson({ version: record.version, dimensions: merged, updatedAt: record.updatedAt.toISOString() }) } });
+      return record;
     });
 
     return this.mapProfile(updated, false);
@@ -203,14 +203,14 @@ export class LearnerProfileService {
     dimensions: Partial<ProfileDimensions>,
     source?: string,
   ): Promise<LearnerProfileRecord> {
-    await this.ensureUserProfile(userId);
-    const updated = await prisma.learningProfile.update({
-      where: { userId },
-      data: {
-        dimensions: toJson(mergeDimensions(dimensions)),
-        version: { increment: 1 },
-        lastSource: source,
-      },
+    const current = await this.ensureUserProfile(userId);
+    const dimensionsToSave = mergeDimensions(dimensions);
+    const updated = await prisma.$transaction(async tx => {
+      const changed = await tx.learningProfile.updateMany({ where: { userId, version: current.version }, data: { dimensions: toJson(dimensionsToSave), version: { increment: 1 }, lastSource: source } });
+      if (!changed.count) throw new HistoryConflict('画像已在其他设备更新，请刷新');
+      const record = await tx.learningProfile.findUniqueOrThrow({ where: { userId } });
+      await tx.userHistoryDocument.create({ data: { userId, key: `profile-version:${record.version}:${crypto.randomUUID()}`, payload: toJson({ version: record.version, dimensions: dimensionsToSave, updatedAt: record.updatedAt.toISOString() }) } });
+      return record;
     });
 
     return this.mapProfile(updated, false);

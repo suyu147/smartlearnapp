@@ -23,7 +23,12 @@ async function generatePptResource(
   userId: string,
   write: (event: LearnEvent) => void,
   nodeId: string,
-  generatePptImages: boolean,
+  pptOptions: {
+    generateImages: boolean;
+    includeInteractive: boolean;
+    includeQuiz: boolean;
+    maxPages?: number;
+  },
 ): Promise<{ resource: Resource; pptScenes: Scene[] } | null> {
   write({ type: 'agent_status', agentId: 'ppt', agentName: '课件Agent', status: 'running', resourceType: 'ppt' });
 
@@ -31,10 +36,14 @@ async function generatePptResource(
     const pptScenes = await generatePptScenes(
       `讲解：${knowledgePoints.join('、')}`,
       aiConfig,
-      generatePptImages,
-      true,
+      {
+        generateImages: pptOptions.generateImages,
+        includeInteractive: pptOptions.includeInteractive,
+        includeQuiz: pptOptions.includeQuiz,
+        maxPages: pptOptions.maxPages,
+      },
       knowledgePoints,
-      (msg) => write({ type: 'text_delta', text: `[PPT] ${msg}` }),
+      (msg) => write({ type: 'text_delta', text: `[PPT] ${msg}\n` }),
       (scene, completed, total) => {
         write({
           type: 'scene_ready',
@@ -121,7 +130,12 @@ export async function generateResourcesNode(
         getUserId(config),
         write,
         node.id,
-        state.generatePptImages ?? false,
+        {
+          generateImages: state.generatePptImages ?? false,
+          includeInteractive: state.enablePptInteractive ?? true,
+          includeQuiz: state.enablePptQuiz ?? true,
+          maxPages: state.pptMaxPages,
+        },
       );
       if (result) {
         generatedResources.push(result.resource);

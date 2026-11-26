@@ -2,10 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { LearningPath, LearningPathNode, PathNodeStatus } from '@/lib/types/learning-path';
 import { useSessionsStore } from './sessions';
-import { fetchLearningPaths, saveLearningPath } from '@/lib/api/learning-path-api';
-import { createLogger } from '@/lib/logger';
-
-const log = createLogger('LearningPathStore');
 
 function getNodeDependencies(path: LearningPath, node: LearningPathNode) {
   if (node.prerequisites.length > 0) {
@@ -95,8 +91,8 @@ export const useLearningPathStore = create<LearningPathState>()(
         set((state) => ({
           path: newPath,
           storedPaths: newPath
-            ? { ...state.storedPaths, [sessionId]: newPath }
-            : state.storedPaths,
+            ? { ...state.storedPaths, [sessionId]: { ...newPath, sessionId } }
+            : Object.fromEntries(Object.entries(state.storedPaths).filter(([id]) => id !== sessionId)),
         }));
       },
 
@@ -147,45 +143,19 @@ export const useLearningPathStore = create<LearningPathState>()(
         });
       },
 
-      syncFromServer: async (userId: string) => {
-        if (get().synced) return;
-        try {
-          const serverPaths = await fetchLearningPaths(userId);
-          if (serverPaths.length > 0) {
-            set((state) => {
-              const merged = { ...state.storedPaths };
-              for (const serverPath of serverPaths) {
-                // Server data supplements local; do not overwrite existing local paths
-                if (!merged[serverPath.id]) {
-                  merged[serverPath.id] = serverPath;
-                }
-              }
-              return { storedPaths: merged, synced: true };
-            });
-          } else {
-            set({ synced: true });
-          }
-        } catch (err) {
-          log.error('syncFromServer failed:', err);
-          set({ synced: true });
-        }
+      syncFromServer: async (_userId: string) => {
+        const { refreshLearningHistory } = await import('@/lib/history/client');
+        await refreshLearningHistory(_userId);
       },
-
-      syncToServer: async (userId: string) => {
-        const { storedPaths } = get();
-        try {
-          for (const path of Object.values(storedPaths)) {
-            await saveLearningPath(userId, path);
-          }
-        } catch (err) {
-          log.error('syncToServer failed:', err);
-        }
+      syncToServer: async (_userId: string) => {
+        const { flushLearningHistory } = await import('@/lib/history/client');
+        await flushLearningHistory(_userId);
       },
     }),
     {
-      name: 'learning-path-storage',
+      name: 'learning-path-cloud-v1',
       version: 2,
-      partialize: (state) => ({ storedPaths: state.storedPaths }),
+      partialize: () => ({}),
       migrate: () => ({ storedPaths: {} }),
     },
   ),

@@ -18,7 +18,12 @@ export async function GET(request: NextRequest) {
     try {
       const db = new BookDbService();
       const books = await db.listBooks(user.id);
-      return apiSuccess(books);
+      const storage = getBookEngine().getStorage();
+      const summaries = await Promise.all(books.map(async record => {
+        const full = await storage.loadFullBook(record.id);
+        return { ...record, title: full?.book.proposal?.title ?? record.title, status: full?.book.status ?? record.status, pageCount: full?.pages.length ?? 0, chapterCount: full?.book.spine?.chapters.length ?? 0 };
+      }));
+      return apiSuccess(summaries);
     } catch (err) {
       log.error('[book] GET error:', err);
       return apiError('Failed to list books', 500);

@@ -12,6 +12,9 @@ import { useResourcesStore } from '@/lib/store/resources';
 import { useLearningPathStore } from '@/lib/store/learning-path';
 import { useLearningProfileStore } from '@/lib/store/learning-profile';
 import { generateId } from '@/lib/utils';
+import { getApiToken } from '@/lib/auth-token';
+import { flushAccountHistory, setAccountHistoryBusy } from '@/lib/history/account-client';
+import { useAuthStore } from '@/lib/store/auth-store';
 import { RESOURCE_TYPE_LABELS, type Resource } from '@/lib/types/resource';
 
 interface Props {
@@ -53,6 +56,7 @@ function buildAttachedResourceSummary(resource: Resource): AttachedResourcePaylo
 }
 
 export function TutorChatPanel({ selectedResource = null }: Props) {
+  const authUserId = useAuthStore(s => s.user?.id);
   const [collapsed, setCollapsed] = useState(false);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -122,11 +126,13 @@ export function TutorChatPanel({ selectedResource = null }: Props) {
     appendTutorMessage(currentSessionId, userMsg);
     setInput('');
     setIsLoading(true);
+    setAccountHistoryBusy(authUserId ?? "", currentSessionId, true);
 
     try {
+      await flushAccountHistory(authUserId ?? "");
       const response = await fetch('/api/v1/smartlearn', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(getApiToken() ? { Authorization: `Bearer ${getApiToken()}` } : {}) },
         body: JSON.stringify({
           action: 'tutor_chat',
           sessionId: currentSessionId,
@@ -146,6 +152,7 @@ export function TutorChatPanel({ selectedResource = null }: Props) {
         throw new Error('Tutor chat request failed');
       }
 
+      if (useAuthStore.getState().user?.id !== authUserId || useSessionsStore.getState().currentSessionId !== currentSessionId) return;
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       const assistantId = generateId();
@@ -161,7 +168,7 @@ export function TutorChatPanel({ selectedResource = null }: Props) {
       let buffer = '';
       while (reader) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || useAuthStore.getState().user?.id !== authUserId || useSessionsStore.getState().currentSessionId !== currentSessionId) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -169,8 +176,8 @@ export function TutorChatPanel({ selectedResource = null }: Props) {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.type === 'text_delta') {
-                assistantContent += data.text;
+              if (data.type === 'text_delta' || data.type === 'content') {
+                assistantContent += data.text ?? data.content ?? '';
                 updateTutorMessage(currentSessionId, assistantId, assistantContent);
               }
             } catch {
@@ -178,7 +185,8 @@ export function TutorChatPanel({ selectedResource = null }: Props) {
           }
         }
       }
-    } catch (error) {
+    } catch (_error) {
+      if (useAuthStore.getState().user?.id !== authUserId || useSessionsStore.getState().currentSessionId !== currentSessionId) return;
       appendTutorMessage(currentSessionId, {
         id: generateId(),
         role: 'assistant',
@@ -187,6 +195,7 @@ export function TutorChatPanel({ selectedResource = null }: Props) {
       });
     } finally {
       setIsLoading(false);
+      setAccountHistoryBusy(authUserId ?? "", currentSessionId, false);
     }
   }
 

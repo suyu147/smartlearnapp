@@ -40,7 +40,9 @@ import type { ConceptHotspot } from '@/lib/types/slides'
 import type { CodeButton } from '@/lib/types/stage'
 import type { Scene } from '@/lib/types/stage'
 import { useResourceDecisionsStore } from '@/lib/store/resource-decisions'
-import { saveUserStateToServer, loadUserStateFromServer } from '@/lib/api/user-sync'
+import { setAccountHistoryBusy, flushAccountHistory } from '@/lib/history/account-client'
+import { LearningHistoryPicker } from '@/components/learning-history-picker'
+import { useRefreshOnFocus } from '@/lib/hooks/use-refresh-on-focus'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -146,6 +148,13 @@ export default function SmartLearnPage() {
 
   const generatePptImages = useSettingsStoreV2((s) => s.generatePptImages)
   const setGeneratePptImages = useSettingsStoreV2((s) => s.setGeneratePptImages)
+  const pptMaxPages = useSettingsStoreV2((s) => s.pptMaxPages)
+  const setPptMaxPages = useSettingsStoreV2((s) => s.setPptMaxPages)
+  const enablePptInteractive = useSettingsStoreV2((s) => s.enablePptInteractive)
+  const setEnablePptInteractive = useSettingsStoreV2((s) => s.setEnablePptInteractive)
+  const enablePptQuiz = useSettingsStoreV2((s) => s.enablePptQuiz)
+  const setEnablePptQuiz = useSettingsStoreV2((s) => s.setEnablePptQuiz)
+  const [showPptSettings, setShowPptSettings] = useState(false)
 
   const abortRef = useRef<AbortController | null>(null)
 
@@ -213,8 +222,17 @@ export default function SmartLearnPage() {
   const totalCount = nodes.length
   const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0
 
+  // When every node is completed there is no in_progress node, so fall back to
+  // the latest completed node that has generated resources. Otherwise the whole
+  // content area (including the generated PPT) renders blank once the last node completes.
+  const latestCompletedNode =
+    [...nodes].reverse().find((n) => n.status === 'completed' && (n.resources?.length ?? 0) > 0)
+    ?? [...nodes].reverse().find((n) => n.status === 'completed')
+    ?? null
+
   // The node currently being viewed: prefer selectedNodeId, fallback to activeNode
-  const viewingNode = (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null) ?? activeNode
+  const viewingNode =
+    (selectedNodeId ? nodes.find((n) => n.id === selectedNodeId) : null) ?? activeNode ?? latestCompletedNode
 
   // Resources for the viewing node
   const activeNodeResources = viewingNode
@@ -249,6 +267,8 @@ export default function SmartLearnPage() {
     [currentSessionId, activeNode, recordQuizResult],
   )
 
+  useRefreshOnFocus(async () => { const owner = authUser?.id; if (!owner || isStreaming) return; const latest = await apiGet<LearnerSnapshot>('/api/v1/smartlearn/profile'); if (useAuthStore.getState().user?.id === owner) setSnapshot(latest); }, !isStreaming)
+
   // -- Derived analytics from snapshot --
   const snapshotAccuracy = (() => {
     const sessions = snapshot?.recentSessions ?? []
@@ -272,23 +292,16 @@ export default function SmartLearnPage() {
   // =========================================================================
 
   useEffect(() => {
-    // Wait for Zustand persist to finish rehydration before restoring.
-    // currentSessionId is only available after the sessions store has
-    // hydrated from localStorage, so we react to its change instead of
-    // using a brittle setTimeout(0) that may fire before hydration.
-    if (!currentSessionId) return
-
-    // Restore the active learning path for the current session
-    const currentPath = useLearningPathStore.getState().path
-    if (!currentPath) {
+    if (currentSessionId) {
       loadPathForSession(currentSessionId)
-    }
-
-    // Restore the active resources for the current session
-    const currentResources = useResourcesStore.getState().resources
-    if (currentResources.length === 0) {
       loadResourcesForSession(currentSessionId)
+    } else {
+      useLearningPathStore.setState({ path: null })
+      useResourcesStore.setState({ resources: [] })
     }
+    setSelectedNodeId(null)
+    setSelectedResource(null)
+    setStreamingPpt(null)
   }, [currentSessionId, loadPathForSession, loadResourcesForSession])
 
   // =========================================================================
@@ -312,44 +325,35 @@ export default function SmartLearnPage() {
           }
         }>(`/api/v1/smartlearn/profile?userId=${userId}`)
 
-        if (!cancelled) {
+        if (!cancelled && useAuthStore.getState().user?.id === authUser?.id) {
           setProfile({
             id: data.profile.id ?? 'remote',
             userId: data.profile.userId,
             version: data.profile.version ?? 0,
             dimensions: data.profile.dimensions,
             updatedAt: new Date().toISOString(),
-            conversationHistory: [],
+            conversationHistory: useLearningProfileStore.getState().profile?.conversationHistory ?? [],
           })
           setSnapshot(data)
         }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && useAuthStore.getState().user?.id === authUser?.id) {
           const message = err instanceof Error ? err.message : '加载画像失败'
           setProfileError(message)
         }
       } finally {
-        if (!cancelled) setIsProfileLoading(false)
+        if (!cancelled && useAuthStore.getState().user?.id === authUser?.id) setIsProfileLoading(false)
       }
     }
 
     fetchProfile()
     return () => { cancelled = true }
-  }, [setProfile])
+  }, [setProfile, authUser?.id])
 
   // =========================================================================
   // Sync user state with server (cross-device data sharing)
   // Push local → server first, then pull server → local
   // =========================================================================
-
-  useEffect(() => {
-    if (!authUser?.id) return
-    // 先推送本地数据到服务器（处理部署前生成但未同步的旧数据）
-    saveUserStateToServer(authUser.id).then(() => {
-      // 再拉取服务器数据（合并其他设备的数据）
-      loadUserStateFromServer(authUser.id)
-    })
-  }, [authUser?.id])
 
   // =========================================================================
   // SSE event processor
@@ -357,6 +361,7 @@ export default function SmartLearnPage() {
 
   const processSSEEvent = useCallback(
     (event: SmartLearnStreamEvent) => {
+      if ((authUser?.id ?? null) !== (useAuthStore.getState().user?.id ?? null)) return
       switch (event.type) {
         // -- Phase lifecycle --
         case 'stage_start':
@@ -383,7 +388,7 @@ export default function SmartLearnPage() {
             // A new learning node was generated — add to path
             const node = meta.node as LearningPathNode
             setStreamingPpt(null)
-            const currentPath = pathRef.current
+            const currentPath = useLearningPathStore.getState().path
             if (currentPath) {
               const exists = currentPath.nodes.some((n) => n.id === node.id)
               if (!exists) {
@@ -394,6 +399,20 @@ export default function SmartLearnPage() {
                   updatedAt: new Date().toISOString(),
                 })
               }
+            } else if (useSessionsStore.getState().currentSessionId) {
+              // 首轮生成时本地还没有 path，不能丢弃 node，否则后续 PPT 无法挂载
+              const now = new Date().toISOString()
+              setPath({
+                id: useSessionsStore.getState().currentSessionId!,
+                userId: authUser?.id ?? '',
+                goal: useSessionsStore.getState().getCurrentSession()?.goal ?? '',
+                nodes: [node],
+                edges: [],
+                estimatedDays: 1,
+                status: 'active',
+                createdAt: now,
+                updatedAt: now,
+              })
             }
           }
 
@@ -442,7 +461,7 @@ export default function SmartLearnPage() {
 
           if (learnEventType === 'path_update' && meta.path) {
             const serverPath = meta.path as import('@/lib/types/learning-path').LearningPath
-            const currentPath = pathRef.current
+            const currentPath = useLearningPathStore.getState().path
             if (currentPath) {
               // Merge strategy: preserve client nodes that already have resources,
               // supplement with server nodes, prefer server data for overlapping nodes
@@ -457,7 +476,7 @@ export default function SmartLearnPage() {
                 } else {
                   // For overlapping nodes, if client has resources but server doesn't, preserve client resources
                   const serverNode = serverNodeMap.get(id)!
-                  if (clientNode.resources.length > 0 && serverNode.resources.length === 0) {
+                  if ((clientNode.resources?.length ?? 0) > 0 && (serverNode.resources?.length ?? 0) === 0) {
                     const idx = mergedNodes.findIndex((n) => n.id === id)
                     if (idx !== -1) {
                       mergedNodes[idx] = { ...serverNode, resources: clientNode.resources }
@@ -513,14 +532,10 @@ export default function SmartLearnPage() {
           setAgentStatus('')
           setCurrentPhase('')
           // Auto-complete the active node when stream ends with resources generated
-          const latestPath = pathRef.current
+          const latestPath = useLearningPathStore.getState().path
           const latestActiveNode = latestPath?.nodes.find((n) => n.status === 'in_progress')
           if (latestActiveNode && latestActiveNode.resources && latestActiveNode.resources.length > 0) {
             updateNodeStatus(latestActiveNode.id, 'completed')
-          }
-          // Save to server for cross-device sync (authenticated users only)
-          if (authUser?.id && authUser.id !== 'anonymous') {
-            saveUserStateToServer(authUser.id)
           }
           break
         }
@@ -530,7 +545,7 @@ export default function SmartLearnPage() {
           break
       }
     },
-    [setPath, addResource, updateDimensions, updateNodeStatus, authUser],
+    [setPath, addResource, updateDimensions, updateNodeStatus, authUser, currentSessionId, currentSession],
   )
 
   // =========================================================================
@@ -562,6 +577,8 @@ export default function SmartLearnPage() {
     }
 
     setGoalInput('')
+    setAccountHistoryBusy(userId, sessionId, true)
+    try { await flushAccountHistory(userId) } catch (error) { if (useAuthStore.getState().user?.id === userId) setAccountHistoryBusy(userId, sessionId, false); setError(error instanceof Error ? error.message : '保存历史失败'); return }
     setIsStreaming(true)
     setPlanning(true)
     setStreamingText('')
@@ -592,6 +609,9 @@ export default function SmartLearnPage() {
           completedNodes,
           currentNodeId: null,
           generatePptImages,
+          pptMaxPages: pptMaxPages ?? undefined,
+          enablePptInteractive,
+          enablePptQuiz,
         }),
         signal: abort.signal,
       })
@@ -633,6 +653,7 @@ export default function SmartLearnPage() {
     } finally {
       setIsStreaming(false)
       setPlanning(false)
+      if (useAuthStore.getState().user?.id === userId) setAccountHistoryBusy(userId, sessionId, false)
       abortRef.current = null
     }
   }
@@ -651,7 +672,8 @@ export default function SmartLearnPage() {
       correctAnswer: string
       difficulty: number
     }>) => {
-      if (!profile?.dimensions) return
+      if (!profile?.dimensions || !currentSessionId) return
+      setAccountHistoryBusy(userId, currentSessionId, true)
       setError(null)
       setIsStreaming(true)
       setStreamingText('')
@@ -717,6 +739,7 @@ export default function SmartLearnPage() {
         setError(message)
       } finally {
         setIsStreaming(false)
+        if (currentSessionId) if (useAuthStore.getState().user?.id === userId) setAccountHistoryBusy(userId, currentSessionId, false)
         abortRef.current = null
       }
     },
@@ -728,7 +751,8 @@ export default function SmartLearnPage() {
   // =========================================================================
 
   const handleGenerateResources = useCallback(async () => {
-    if (!profile?.dimensions) return
+    if (!profile?.dimensions || !currentSessionId) return
+    setAccountHistoryBusy(userId, currentSessionId, true)
     setError(null)
     setIsStreaming(true)
     setStreamingText('')
@@ -755,6 +779,9 @@ export default function SmartLearnPage() {
           currentNodeId: latestActiveNode?.id ?? null,
           currentNodeTitle: latestActiveNode?.title ?? null,
           generatePptImages,
+          pptMaxPages: pptMaxPages ?? undefined,
+          enablePptInteractive,
+          enablePptQuiz,
         }),
         signal: abort.signal,
       })
@@ -795,9 +822,10 @@ export default function SmartLearnPage() {
     } finally {
       setIsStreaming(false)
       setAgentStatus('')
+      if (currentSessionId) if (useAuthStore.getState().user?.id === userId) setAccountHistoryBusy(userId, currentSessionId, false)
       abortRef.current = null
     }
-  }, [profile, currentSessionId, currentSession, nodes, activeNode, processSSEEvent, generatePptImages])
+  }, [profile, currentSessionId, currentSession, nodes, activeNode, processSSEEvent, generatePptImages, pptMaxPages, enablePptInteractive, enablePptQuiz])
 
   // =========================================================================
   // Update profile dimensions via API
@@ -911,6 +939,7 @@ export default function SmartLearnPage() {
               </p>
             </div>
             <div className="flex gap-2">
+              <LearningHistoryPicker disabled={isStreaming} />
               <label className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--foreground)] cursor-pointer">
                 <input
                   type="checkbox"
@@ -921,6 +950,65 @@ export default function SmartLearnPage() {
                 />
                 生成配图
               </label>
+              <div className="relative">
+                <button
+                  onClick={() => setShowPptSettings((v) => !v)}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[var(--muted)] text-[var(--foreground)] border border-[var(--border)] hover:bg-[var(--accent)] transition-colors"
+                >
+                  PPT 设置
+                </button>
+                {showPptSettings && (
+                  <div className="absolute right-0 top-full z-30 mt-2 w-64 space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 shadow-lg">
+                    <div className="text-[12px] font-semibold text-[var(--foreground)]">PPT 生成选项</div>
+                    <label className="flex items-center justify-between gap-3 text-[12px] text-[var(--foreground)]">
+                      <span>最多页数</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={30}
+                        value={pptMaxPages ?? ''}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          if (!value) {
+                            setPptMaxPages(null)
+                            return
+                          }
+                          const parsed = Number(value)
+                          if (Number.isFinite(parsed) && parsed > 0) {
+                            setPptMaxPages(Math.min(30, Math.floor(parsed)))
+                          }
+                        }}
+                        placeholder="默认"
+                        disabled={isStreaming}
+                        className="w-20 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-right text-[12px] outline-none focus:border-[var(--primary)]"
+                      />
+                    </label>
+                    <label className="flex items-center gap-2 text-[12px] text-[var(--foreground)] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enablePptInteractive}
+                        onChange={(e) => setEnablePptInteractive(e.target.checked)}
+                        disabled={isStreaming}
+                        className="h-3.5 w-3.5 accent-[var(--primary)]"
+                      />
+                      生成交互 HTML
+                    </label>
+                    <label className="flex items-center gap-2 text-[12px] text-[var(--foreground)] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={enablePptQuiz}
+                        onChange={(e) => setEnablePptQuiz(e.target.checked)}
+                        disabled={isStreaming}
+                        className="h-3.5 w-3.5 accent-[var(--primary)]"
+                      />
+                      生成随堂测验
+                    </label>
+                    <p className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                      页数留空时按默认规则生成；关闭后 PPT 内不再创建对应场景。
+                    </p>
+                  </div>
+                )}
+              </div>
               {totalCount > 0 && !isStreaming && (
                 <button
                   onClick={() => setShowGoalInput(!showGoalInput)}

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { apiGet, apiPut } from '@/lib/api-client';
-import { createLogger } from '@/lib/logger';
+import { getApiToken } from '@/lib/auth-token';
 import type {
   TTSProviderId,
   ASRProviderId,
@@ -9,37 +9,10 @@ import type {
   ASRProviderConfig,
 } from '@/lib/audio/types';
 
-const log = createLogger('SettingsStoreV2');
 
 /** Shape of settings returned by the server (all fields optional for safe merging) */
-interface ServerSettingsResponse {
-  theme?: 'light' | 'dark' | 'snow' | 'glass' | 'system';
-  language?: string;
-  defaultModel?: string;
-  temperature?: number;
-  maxTokens?: number;
-  thinkingMode?: boolean;
-  autoContextWindow?: boolean;
-  contextWindowThreshold?: number;
-  rateLimitEnabled?: boolean;
-  sparkApiKey?: string;
-  sparkApiSecret?: string;
-  sparkModelId?: string;
-  generatePptImages?: boolean;
-  maxTurns?: string;
-  selectedAgentIds?: string[];
-  smartlearnProviderId?: string;
-  smartlearnModelId?: string;
-  smartlearnApiKey?: string;
-  smartlearnBaseUrl?: string;
-  disabledAgentIds?: string[];
-  maxResourceConcurrency?: number;
-  ttsProviderId?: TTSProviderId;
-  ttsVoice?: string;
-  ttsSpeed?: number;
-  asrProviderId?: ASRProviderId;
-  asrLanguage?: string;
-}
+const SYNCED_FIELDS = ["theme", "language", "defaultModel", "temperature", "maxTokens", "thinkingMode", "autoContextWindow", "contextWindowThreshold", "rateLimitEnabled", "sparkModelId", "generatePptImages", "pptMaxPages", "enablePptInteractive", "enablePptQuiz", "maxTurns", "selectedAgentIds", "smartlearnProviderId", "smartlearnModelId", "smartlearnBaseUrl", "disabledAgentIds", "maxResourceConcurrency", "ttsProviderId", "ttsVoice", "ttsSpeed", "asrProviderId", "asrLanguage"] as const;
+type ServerSettingsResponse = Partial<Pick<SettingsState, typeof SYNCED_FIELDS[number]>> & { revision?: number };
 
 interface SettingsState {
   // LLM
@@ -66,6 +39,9 @@ interface SettingsState {
   sparkModelId: string;
   // V1 bridge: PPT / agent selection
   generatePptImages: boolean;
+  pptMaxPages: number | null;
+  enablePptInteractive: boolean;
+  enablePptQuiz: boolean;
   maxTurns: string;
   selectedAgentIds: string[];
   // V1 bridge: TTS
@@ -79,6 +55,8 @@ interface SettingsState {
   asrProvidersConfig: Partial<Record<ASRProviderId, ASRProviderConfig>>;
   // Sync state (not persisted — resets on each page load)
   hydrated: boolean;
+  revision: number;
+  cacheOwner: string | null;
   // Methods — LLM
   setDefaultModel: (m: string) => void;
   setTemperature: (t: number) => void;
@@ -100,15 +78,18 @@ interface SettingsState {
   setSparkApiSecret: (secret: string) => void;
   setSparkModelId: (id: string) => void;
   setGeneratePptImages: (enabled: boolean) => void;
+  setPptMaxPages: (pages: number | null) => void;
+  setEnablePptInteractive: (enabled: boolean) => void;
+  setEnablePptQuiz: (enabled: boolean) => void;
   setMaxTurns: (turns: string) => void;
   setSelectedAgentIds: (ids: string[]) => void;
   // Methods — Server sync
-  syncFromServer: () => Promise<void>;
+  syncFromServer: (force?: boolean) => Promise<void>;
   syncToServer: () => Promise<void>;
 }
 
-// Module-level flag to prevent concurrent sync calls across multiple components
-let syncInProgress = false;
+// In-flight settings reads are scoped by account so a late request for A cannot block B.
+const settingsReads = new Map<string, Promise<void>>();
 
 export const useSettingsStoreV2 = create<SettingsState>()(
   persist(
@@ -137,6 +118,9 @@ export const useSettingsStoreV2 = create<SettingsState>()(
       sparkModelId: 'generalv3',
       // V1 bridge defaults — PPT / agents
       generatePptImages: false,
+      pptMaxPages: null,
+      enablePptInteractive: true,
+      enablePptQuiz: true,
       maxTurns: '',
       selectedAgentIds: [],
       // V1 bridge defaults — TTS
@@ -150,6 +134,8 @@ export const useSettingsStoreV2 = create<SettingsState>()(
       asrProvidersConfig: {},
       // Sync state
       hydrated: false,
+      revision: 0,
+      cacheOwner: null,
 
       // LLM methods
       setDefaultModel: (m) => set({ defaultModel: m }),
@@ -179,6 +165,9 @@ export const useSettingsStoreV2 = create<SettingsState>()(
       setSparkApiSecret: (secret) => set({ sparkApiSecret: secret }),
       setSparkModelId: (id) => set({ sparkModelId: id }),
       setGeneratePptImages: (enabled) => set({ generatePptImages: enabled }),
+      setPptMaxPages: (pages) => set({ pptMaxPages: pages }),
+      setEnablePptInteractive: (enabled) => set({ enablePptInteractive: enabled }),
+      setEnablePptQuiz: (enabled) => set({ enablePptQuiz: enabled }),
       setMaxTurns: (turns) => set({ maxTurns: turns }),
       setSelectedAgentIds: (ids) => set({ selectedAgentIds: ids }),
 
@@ -186,116 +175,36 @@ export const useSettingsStoreV2 = create<SettingsState>()(
       // Server sync
       // ------------------------------------------------------------------
 
-      syncFromServer: async () => {
-        if (syncInProgress || get().hydrated) return;
-        syncInProgress = true;
-        try {
-          const server = await apiGet<ServerSettingsResponse>(
-            '/api/v1/settings',
-          );
-
-          // Merge only explicitly defined server fields into local state
-          const merged: Partial<SettingsState> = {};
-          if (server.theme !== undefined) merged.theme = server.theme;
-          if (server.language !== undefined) merged.language = server.language;
-          if (server.defaultModel !== undefined)
-            merged.defaultModel = server.defaultModel;
-          if (server.temperature !== undefined)
-            merged.temperature = server.temperature;
-          if (server.maxTokens !== undefined)
-            merged.maxTokens = server.maxTokens;
-          if (server.thinkingMode !== undefined)
-            merged.thinkingMode = server.thinkingMode;
-          if (server.autoContextWindow !== undefined)
-            merged.autoContextWindow = server.autoContextWindow;
-          if (server.contextWindowThreshold !== undefined)
-            merged.contextWindowThreshold = server.contextWindowThreshold;
-          if (server.rateLimitEnabled !== undefined)
-            merged.rateLimitEnabled = server.rateLimitEnabled;
-          if (server.sparkApiKey !== undefined)
-            merged.sparkApiKey = server.sparkApiKey;
-          if (server.sparkApiSecret !== undefined)
-            merged.sparkApiSecret = server.sparkApiSecret;
-          if (server.sparkModelId !== undefined)
-            merged.sparkModelId = server.sparkModelId;
-          if (server.generatePptImages !== undefined)
-            merged.generatePptImages = server.generatePptImages;
-          if (server.maxTurns !== undefined) merged.maxTurns = server.maxTurns;
-          if (server.selectedAgentIds !== undefined)
-            merged.selectedAgentIds = server.selectedAgentIds;
-          if (server.smartlearnProviderId !== undefined)
-            merged.smartlearnProviderId = server.smartlearnProviderId;
-          if (server.smartlearnModelId !== undefined)
-            merged.smartlearnModelId = server.smartlearnModelId;
-          if (server.smartlearnApiKey !== undefined)
-            merged.smartlearnApiKey = server.smartlearnApiKey;
-          if (server.smartlearnBaseUrl !== undefined)
-            merged.smartlearnBaseUrl = server.smartlearnBaseUrl;
-          if (server.disabledAgentIds !== undefined)
-            merged.disabledAgentIds = server.disabledAgentIds;
-          if (server.maxResourceConcurrency !== undefined)
-            merged.maxResourceConcurrency = server.maxResourceConcurrency;
-          if (server.ttsProviderId !== undefined)
-            merged.ttsProviderId = server.ttsProviderId;
-          if (server.ttsVoice !== undefined) merged.ttsVoice = server.ttsVoice;
-          if (server.ttsSpeed !== undefined) merged.ttsSpeed = server.ttsSpeed;
-          if (server.asrProviderId !== undefined)
-            merged.asrProviderId = server.asrProviderId;
-          if (server.asrLanguage !== undefined)
-            merged.asrLanguage = server.asrLanguage;
-
-          merged.hydrated = true;
-          set(merged);
-          log.info('Settings synced from server');
-        } catch (err) {
-          log.warn('Failed to sync settings from server:', err);
-          // Mark hydrated even on failure to prevent retry loops
-          set({ hydrated: true });
-        } finally {
-          syncInProgress = false;
-        }
+      syncFromServer: async (force = false) => {
+        const owner = get().cacheOwner;
+        if (!owner || (get().hydrated && !force)) return;
+        const token = getApiToken();
+        const requestKey = `${owner}:${token ?? ''}`;
+        const pending = settingsReads.get(requestKey);
+        if (pending) return pending;
+        const request = (async () => {
+          const server = await apiGet<ServerSettingsResponse>('/api/v1/settings');
+          if (getApiToken() !== token || get().cacheOwner !== owner) return;
+          const merged: Record<string, unknown> = {};
+          for (const field of SYNCED_FIELDS) if (server[field] !== undefined) merged[field] = server[field];
+          set({ ...merged, revision: server.revision ?? 0, hydrated: true });
+        })();
+        settingsReads.set(requestKey, request);
+        try { await request; }
+        finally { if (settingsReads.get(requestKey) === request) settingsReads.delete(requestKey); }
       },
-
       syncToServer: async () => {
-        const s = get();
-        const payload: ServerSettingsResponse = {
-          theme: s.theme,
-          language: s.language,
-          defaultModel: s.defaultModel,
-          temperature: s.temperature,
-          maxTokens: s.maxTokens,
-          thinkingMode: s.thinkingMode,
-          autoContextWindow: s.autoContextWindow,
-          contextWindowThreshold: s.contextWindowThreshold,
-          rateLimitEnabled: s.rateLimitEnabled,
-          sparkApiKey: s.sparkApiKey,
-          sparkApiSecret: s.sparkApiSecret,
-          sparkModelId: s.sparkModelId,
-          generatePptImages: s.generatePptImages,
-          maxTurns: s.maxTurns,
-          selectedAgentIds: s.selectedAgentIds,
-          smartlearnProviderId: s.smartlearnProviderId,
-          smartlearnModelId: s.smartlearnModelId,
-          smartlearnApiKey: s.smartlearnApiKey,
-          smartlearnBaseUrl: s.smartlearnBaseUrl,
-          disabledAgentIds: s.disabledAgentIds,
-          maxResourceConcurrency: s.maxResourceConcurrency,
-          ttsProviderId: s.ttsProviderId,
-          ttsVoice: s.ttsVoice,
-          ttsSpeed: s.ttsSpeed,
-          asrProviderId: s.asrProviderId,
-          asrLanguage: s.asrLanguage,
-        };
-        try {
-          await apiPut('/api/v1/settings', payload);
-          log.info('Settings synced to server');
-        } catch (err) {
-          log.warn('Failed to sync settings to server:', err);
-        }
+        const current = get();
+        const token = getApiToken();
+        const owner = current.cacheOwner;
+        if (!current.hydrated) return;
+        const payload = Object.fromEntries(SYNCED_FIELDS.map(field => [field, current[field]]));
+        const server = await apiPut<ServerSettingsResponse>('/api/v1/settings', { ...payload, expectedRevision: current.revision });
+        if (getApiToken() === token && get().cacheOwner === owner) set({ revision: server.revision ?? current.revision + 1 });
       },
     }),
     {
-      name: 'sl-settings-storage',
+      name: 'settings-cloud-v1',
       partialize: (state) => {
         // Exclude hydrated from persistence so syncFromServer runs on each page load.
         // Methods are functions and automatically stripped by JSON serialization.

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import {
   FileText,
   Video,
@@ -16,6 +17,7 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
+  Presentation,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { apiFetch } from '@/lib/api-client';
@@ -23,6 +25,7 @@ import { fetchResources, saveResources, deleteResources } from '@/lib/api/resour
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useSettingsStoreV2 } from '@/lib/store/settings-store';
 import { ResourceViewer } from '@/components/workspace/resource-viewer';
+import { RESOURCE_TYPE_LABELS } from '@/lib/types/resource';
 import type { Resource, ResourceType } from '@/lib/types/resource';
 import {
   Dialog,
@@ -107,6 +110,25 @@ const RESOURCE_CARDS: ResourceCardConfig[] = [
 // Generated resource entry shape
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve display metadata for a resource type.
+ * History entries may contain types outside RESOURCE_CARDS (e.g. `ppt`
+ * produced by the learning path), so a fallback config is required here.
+ */
+function getCardMeta(type: ResourceType): ResourceCardConfig {
+  return (
+    RESOURCE_CARDS.find((card) => card.type === type) ?? {
+      type,
+      title: RESOURCE_TYPE_LABELS[type] ?? type,
+      desc: '',
+      placeholder: '',
+      icon: Presentation,
+      iconClass: 'bg-pastel-violet text-violet-600',
+      accent: 'from-violet-500/10 to-violet-500/0',
+    }
+  );
+}
+
 interface GeneratedEntry {
   resource: Resource;
   isLoading?: boolean;
@@ -127,22 +149,24 @@ export default function ResourcesPage() {
   const userId = useAuthStore((s) => s.user?.id) ?? '';
   const settings = useSettingsStoreV2();
 
-  // 加载当前账号已保存的资源，保证换浏览器 / 重新登录后仍可访问
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
   useEffect(() => {
     let alive = true;
-    fetchResources(userId).then((serverResources) => {
-      if (!alive || serverResources.length === 0) return;
-      setEntries((prev) => {
-        const existingIds = new Set(prev.map((entry) => entry.resource.id));
-        const incoming = serverResources
-          .filter((resource) => resource.status !== 'generating' && !existingIds.has(resource.id))
-          .map((resource) => ({ resource }));
-        return incoming.length > 0 ? [...incoming, ...prev] : prev;
-      });
-    });
-    return () => {
-      alive = false;
-    };
+    async function refresh() {
+      if (!userId || entriesRef.current.some(entry => entry.isLoading)) return;
+      try {
+        const serverResources = await fetchResources(userId);
+        if (!alive) return;
+        setEntries(serverResources.filter(r => r.status !== 'generating').map(resource => ({ resource })));
+        setActiveIndex(null);
+      } catch (error) { if (alive) toast.error(error instanceof Error ? error.message : '加载资源失败'); }
+    }
+    const onRefresh = () => { if (document.visibilityState === 'visible') void refresh(); };
+    setEntries([]); setActiveIndex(null);
+    void refresh();
+    window.addEventListener('focus', onRefresh); window.addEventListener('online', onRefresh); document.addEventListener('visibilitychange', onRefresh);
+    return () => { alive = false; window.removeEventListener('focus', onRefresh); window.removeEventListener('online', onRefresh); document.removeEventListener('visibilitychange', onRefresh); };
   }, [userId]);
 
   /** Build aiConfig from the smartlearn settings store. */
@@ -231,12 +255,8 @@ export default function ResourcesPage() {
           createdAt: new Date().toISOString(),
         };
 
-        setEntries((prev) =>
-          prev.map((entry) =>
-            entry.resource.id === placeholderId ? { resource: finished } : entry,
-          ),
-        );
-        void saveResources(userId, [finished]);
+        const [saved] = await saveResources(userId, [finished]);
+        setEntries(prev => prev.map(entry => entry.resource.id === placeholderId ? { resource: saved } : entry));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setEntries((prev) =>
@@ -257,23 +277,18 @@ export default function ResourcesPage() {
   );
 
   /** Remove an entry. */
-  const handleRemove = useCallback((index: number) => {
-    const removedId = entries[index]?.resource.id;
-    setEntries((prev) => prev.filter((_, idx) => idx !== index));
-    setActiveIndex((cur) => {
-      if (cur === null) return null;
-      if (index < cur) return cur - 1;
-      if (index === cur) return null;
-      return cur;
-    });
-    if (removedId) void deleteResources([removedId]);
+  const handleRemove = useCallback(async (index: number) => {
+    const resource = entries[index]?.resource;
+    if (!resource) return;
+    try {
+      await deleteResources([resource.id]);
+      setEntries(prev => prev.filter(entry => entry.resource.id !== resource.id));
+      setActiveIndex(null);
+    } catch (error) { toast.error(error instanceof Error ? error.message : '删除失败'); }
   }, [entries]);
-
-  /** Clear all generated resources for the current user. */
-  const handleClearAll = useCallback(() => {
-    setEntries([]);
-    setActiveIndex(null);
-    void deleteResources();
+  const handleClearAll = useCallback(async () => {
+    try { await deleteResources(); setEntries([]); setActiveIndex(null); }
+    catch (error) { toast.error(error instanceof Error ? error.message : '删除失败'); }
   }, []);
 
   /** Regenerate an entry using its original name. */
@@ -312,6 +327,8 @@ export default function ResourcesPage() {
 
         const finished: Resource = {
           id: entry.resource.id,
+          sessionId: entry.resource.sessionId,
+          revision: entry.resource.revision,
           userId: '',
           type: res.type,
           title: res.title,
@@ -321,10 +338,8 @@ export default function ResourcesPage() {
           status: 'ready',
           createdAt: new Date().toISOString(),
         };
-        setEntries((prev) =>
-          prev.map((e) => (e.resource.id === resourceId ? { resource: finished } : e)),
-        );
-        void saveResources(userId, [finished]);
+        const [saved] = await saveResources(userId, [finished]);
+        setEntries(prev => prev.map(e => e.resource.id === resourceId ? { resource: saved } : e));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setEntries((prev) =>
@@ -425,7 +440,7 @@ export default function ResourcesPage() {
               {/* Resource list */}
               <div className="space-y-2">
                 {entries.map((entry, idx) => {
-                  const card = RESOURCE_CARDS.find((c) => c.type === entry.resource.type)!;
+                  const card = getCardMeta(entry.resource.type);
                   const Icon = card.icon;
                   const active = idx === activeIndex;
                   return (
@@ -476,17 +491,20 @@ export default function ResourcesPage() {
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRegenerate(idx);
-                          }}
-                          disabled={entry.isLoading}
-                          className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-blue-100 hover:text-blue-600 disabled:opacity-40"
-                          title="重新生成"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
+                        {/* 动态课件有独立的生成流程，不支持在此重新生成 */}
+                        {entry.resource.type !== 'ppt' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRegenerate(idx);
+                            }}
+                            disabled={entry.isLoading}
+                            className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-blue-100 hover:text-blue-600 disabled:opacity-40"
+                            title="重新生成"
+                          >
+                            <RefreshCw className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

@@ -1,108 +1,53 @@
+import { Prisma } from '@prisma/client';
 import prisma from '@/lib/utils/database';
-import { createLogger } from '@/lib/logger';
-import type { Resource as FrontendResource } from '@/lib/types/resource';
-
-const log = createLogger('server:resource-persistence');
-
-/** Serialize value to a Prisma-safe JSON input using the same pattern as the existing codebase. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toJsonSafe(value: unknown): any {
-  return JSON.parse(JSON.stringify(value));
-}
-
-/**
- * Save a batch of resources for a user to the database.
- * Uses upsert (by id) so repeated saves are idempotent.
- */
-export async function saveResources(
-  userId: string,
-  resources: FrontendResource[],
-): Promise<void> {
-  if (resources.length === 0) return;
-
-  const operations = resources.map((r) =>
-    prisma.resource.upsert({
-      where: { id: r.id },
-      update: {
-        type: r.type,
-        title: r.title,
-        content: r.content,
-        metadata: toJsonSafe(r.metadata ?? {}),
-        sourceAgent: r.sourceAgent,
-        status: r.status,
-      },
-      create: {
-        id: r.id,
-        userId,
-        type: r.type,
-        title: r.title,
-        content: r.content,
-        metadata: toJsonSafe(r.metadata ?? {}),
-        sourceAgent: r.sourceAgent,
-        status: r.status,
-      },
-    }),
-  );
-
-  await prisma.$transaction(operations);
-  log.info(`Saved ${resources.length} resources for user=${userId}`);
-}
-
-/**
- * Load all resources for a user from the database.
- * Returns the most recently created resources first.
- */
-export async function loadResources(userId: string): Promise<FrontendResource[]> {
-  const records = await prisma.resource.findMany({
-    where: { userId },
-    orderBy: { createdAt: 'desc' },
+import type { Resource } from '@/lib/types/resource';
+import { HistoryConflict, ensureHistoryUser } from '@/lib/history/server';
+const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
+export async function saveResources(userId: string, resources: Resource[]): Promise<Resource[]> {
+  await ensureHistoryUser(userId);
+  return prisma.$transaction(async tx => {
+    const saved: Resource[] = [];
+    for (const resource of resources) {
+      const existing = await tx.resource.findUnique({ where: { id: resource.id } });
+      const data = { type: resource.type, title: resource.title, content: resource.content, metadata: json(resource.metadata ?? {}), sourceAgent: resource.sourceAgent, status: resource.status };
+      if (!existing) {
+        // Session resources are created atomically with their learning-history revision.
+        if (resource.sessionId || resource.revision) throw new HistoryConflict();
+        const record = await tx.resource.create({ data: { ...data, id: resource.id, userId } });
+        saved.push(mapResource(record));
+      } else {
+        const changed = await tx.resource.updateMany({ where: { id: resource.id, userId, deletedAt: null, revision: resource.revision ?? 0 }, data: { ...data, revision: { increment: 1 } } });
+        if (!changed.count) throw new HistoryConflict();
+        if (existing.sessionId) {
+          const session = await tx.dtSession.updateMany({ where: { id: existing.sessionId, userId, deletedAt: null }, data: { revision: { increment: 1 } } });
+          if (!session.count) throw new HistoryConflict();
+        }
+        saved.push(mapResource((await tx.resource.findUniqueOrThrow({ where: { id: resource.id } }))));
+      }
+    }
+    return saved;
   });
-
-  return records.map(mapDbResourceToFrontend);
 }
-
-/**
- * Delete resources for a user.
- * When ids is omitted, deletes all resources owned by the user.
- * Returns the number of deleted records.
- */
+export async function loadResources(userId: string, sessionId?: string | null): Promise<Resource[]> {
+  const records = await prisma.resource.findMany({ where: { userId, deletedAt: null, ...(sessionId !== undefined ? { sessionId } : {}), OR: [{ sessionId: null }, { session: { deletedAt: null } }] }, orderBy: { createdAt: 'desc' } });
+  return records.map(mapResource);
+}
 export async function deleteResources(userId: string, ids?: string[]): Promise<number> {
-  const targets = await prisma.resource.findMany({
-    where: {
-      userId,
-      ...(ids && ids.length > 0 ? { id: { in: ids } } : {}),
-    },
-    select: { id: true },
+  return prisma.$transaction(async tx => {
+    const where = { userId, deletedAt: null, ...(ids ? { id: { in: ids } } : {}) };
+    const targets = await tx.resource.findMany({ where, select: { id: true, sessionId: true } });
+    const result = await tx.resource.updateMany({ where, data: { deletedAt: new Date(), revision: { increment: 1 } } });
+    const sessionIds = [...new Set(targets.flatMap(r => r.sessionId ? [r.sessionId] : []))];
+    await tx.dtSession.updateMany({ where: { userId, id: { in: sessionIds }, deletedAt: null }, data: { revision: { increment: 1 } } });
+    const deleted = new Set(targets.map(r => r.id));
+    const paths = await tx.learningPath.findMany({ where: { userId, sessionId: { in: sessionIds }, deletedAt: null } });
+    for (const path of paths) {
+      const nodes = (path.nodes as unknown as Array<{ resources?: Array<{ resourceId: string }> }>).map(node => ({ ...node, resources: node.resources?.filter(r => !deleted.has(r.resourceId)) ?? [] }));
+      await tx.learningPath.update({ where: { id: path.id }, data: { nodes: json(nodes), revision: { increment: 1 } } });
+    }
+    return result.count;
   });
-  const targetIds = targets.map((target) => target.id);
-  if (targetIds.length === 0) return 0;
-
-  // 资源可能被学习路径节点引用，先清理关联再删除，避免外键约束导致整批删除失败
-  const [, result] = await prisma.$transaction([
-    prisma.pathNodeResource.deleteMany({ where: { resourceId: { in: targetIds } } }),
-    prisma.resource.deleteMany({ where: { id: { in: targetIds }, userId } }),
-  ]);
-
-  log.info(`Deleted ${result.count} resources for user=${userId}`);
-  return result.count;
 }
-
-/**
- * Map a Prisma Resource record to the frontend Resource type.
- */
-function mapDbResourceToFrontend(
-  record: Awaited<ReturnType<typeof prisma.resource.findFirst>>,
-): FrontendResource {
-  if (!record) throw new Error('Unexpected null resource record');
-  return {
-    id: record.id,
-    userId: record.userId,
-    type: record.type as FrontendResource['type'],
-    title: record.title,
-    content: record.content,
-    metadata: record.metadata as FrontendResource['metadata'],
-    sourceAgent: record.sourceAgent,
-    status: record.status as FrontendResource['status'],
-    createdAt: record.createdAt.toISOString(),
-  };
+export function mapResource(record: NonNullable<Awaited<ReturnType<typeof prisma.resource.findFirst>>>): Resource {
+  return { id: record.id, userId: record.userId, sessionId: record.sessionId, revision: record.revision, type: record.type, title: record.title, content: record.content, metadata: record.metadata as Resource['metadata'], sourceAgent: record.sourceAgent, status: record.status, createdAt: record.createdAt.toISOString(), updatedAt: record.updatedAt.toISOString() };
 }

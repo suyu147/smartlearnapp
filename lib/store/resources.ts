@@ -2,10 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Resource, ResourceType } from '@/lib/types/resource';
 import { useSessionsStore } from './sessions';
-import { fetchResources, saveResources } from '@/lib/api/resources-api';
-import { createLogger } from '@/lib/logger';
-
-const log = createLogger('ResourcesStore');
 
 interface StoredResourcesData {
   [sessionId: string]: Resource[];
@@ -48,7 +44,7 @@ export const useResourcesStore = create<ResourcesState>()(
       addResource: (resource) => {
         const sessionId = useSessionsStore.getState().currentSessionId;
         set((state) => {
-          const updated = [...state.resources, resource];
+          const updated = [...state.resources.filter(r => r.id !== resource.id), { ...resource, sessionId }];
           if (!sessionId) return { resources: updated };
           return {
             resources: updated,
@@ -117,73 +113,20 @@ export const useResourcesStore = create<ResourcesState>()(
        * Load resources from server for the given userId and merge them
        * into the current session's resource list.
        */
-      syncFromServer: async (userId: string, sessionId: string) => {
-        const state = get();
-        // Reset sync flag when user changes
-        if (state.lastSyncedUserId !== userId) {
-          set({ synced: false, lastSyncedUserId: userId });
-        }
-        if (get().synced) return;
-
-        try {
-          const serverResources = await fetchResources(userId);
-          if (serverResources.length > 0) {
-            set((s) => {
-              const existing = s.storedResources[sessionId] ?? [];
-              const existingIds = new Set(existing.map((r) => r.id));
-              const newOnes = serverResources.filter((r) => !existingIds.has(r.id));
-              if (newOnes.length === 0) return { synced: true };
-
-              const merged = [...existing, ...newOnes];
-              return {
-                storedResources: { ...s.storedResources, [sessionId]: merged },
-                resources: s.resources.length > 0 ? [...s.resources, ...newOnes] : merged,
-                synced: true,
-              };
-            });
-          } else {
-            set({ synced: true });
-          }
-        } catch (err) {
-          log.error('syncFromServer failed:', err);
-          set({ synced: true });
-        }
+      syncFromServer: async (_userId: string, sessionId: string) => {
+        const { refreshLearningHistory } = await import('@/lib/history/client');
+        await refreshLearningHistory(_userId);
+        if (useSessionsStore.getState().currentSessionId === sessionId) get().loadResourcesForSession(sessionId);
       },
-
-      /**
-       * Push all resources across ALL sessions to the server.
-       * This ensures resources from multiple sessions are persisted,
-       * not just the current one.
-       */
-      syncToServer: async (userId: string) => {
-        const { storedResources } = get();
-        // Collect all resources across all sessions
-        const allResources = Object.values(storedResources).flat();
-        // Deduplicate by id
-        const seen = new Set<string>();
-        const unique = allResources.filter((r) => {
-          if (seen.has(r.id)) return false;
-          seen.add(r.id);
-          return true;
-        });
-
-        if (unique.length === 0) return;
-
-        try {
-          await saveResources(userId, unique);
-          log.info(`Synced ${unique.length} resources to server for user=${userId}`);
-        } catch (err) {
-          log.error('syncToServer failed:', err);
-        }
+      syncToServer: async (_userId: string) => {
+        const { flushLearningHistory } = await import('@/lib/history/client');
+        await flushLearningHistory(_userId);
       },
     }),
     {
-      name: 'resources-storage',
+      name: 'resources-cloud-v1',
       version: 3,
-      partialize: (state) => ({
-        storedResources: state.storedResources,
-        lastSyncedUserId: state.lastSyncedUserId,
-      }),
+      partialize: () => ({}),
       migrate: (persisted: unknown) => {
         const old = persisted as { storedResources?: StoredResourcesData };
         return { storedResources: old.storedResources ?? {}, lastSyncedUserId: '' };

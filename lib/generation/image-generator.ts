@@ -396,7 +396,19 @@ export async function batchGenerateImages(
       );
 
       if (result) {
-        mapping.set(result.elementId, result.url);
+        let durableUrl = result.url;
+        if (/^https?:/.test(durableUrl)) {
+          try {
+            const response = await fetch(durableUrl, { signal: AbortSignal.timeout(30_000) });
+            if (!response.ok) throw new Error(`Image download HTTP ${response.status}`);
+            const contentType = response.headers.get('content-type')?.split(';')[0] ?? 'image/png';
+            if (!contentType.startsWith('image/')) throw new Error('Image response is not an image');
+            const bytes = Buffer.from(await response.arrayBuffer());
+            if (bytes.length > 20 * 1024 * 1024) throw new Error('Generated image is too large');
+            durableUrl = `data:${contentType};base64,${bytes.toString('base64')}`;
+          } catch (error) { log.warn('Could not persist generated image:', error); continue; }
+        }
+        mapping.set(result.elementId, durableUrl);
       }
     }
   };

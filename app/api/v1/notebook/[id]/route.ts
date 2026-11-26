@@ -5,6 +5,7 @@
  */
 
 import { NextRequest } from 'next/server';
+import { HistoryConflict } from '@/lib/history/server';
 import { createLogger } from '@/lib/logger';
 import { getNotebookService } from '@/lib/deeptutor/bootstrap';
 
@@ -61,17 +62,15 @@ export async function PUT(
     const { NoteCreateSchema } = await import('@/lib/server/schemas');
     const body = await validatedBody(NoteCreateSchema, req);
 
-    const record = await getNotebookService().addRecord(userId, id, {
-      type: 'note',
-      title: body.title ?? '',
-      summary: '',
-      content: body.content,
-      metadata: body.tags ? { tags: body.tags } : {},
-    });
+    const svc = getNotebookService();
+    const record = body.recordId
+      ? await svc.updateRecord(userId, id, body.recordId, body.expectedUpdatedAt ?? '', { title: body.title, content: body.content })
+      : await svc.addRecord(userId, id, { type: 'note', title: body.title ?? '', summary: '', content: body.content, metadata: body.tags ? { tags: body.tags } : {} });
     return new Response(JSON.stringify({ success: true, data: record }), {
       headers: { 'Content-Type': 'application/json' },
     });
   } catch (err) {
+    if (err instanceof HistoryConflict) return apiError(err, 409);
     if (err instanceof Error && err.name === 'ValidationError') {
       return new Response(JSON.stringify({ error: err.message }), {
         status: 400,

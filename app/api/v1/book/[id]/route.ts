@@ -1,4 +1,6 @@
 import { NextRequest } from 'next/server';
+import { mutateBook } from '@/lib/history/book-mutation';
+import { HistoryConflict } from '@/lib/history/server';
 import { apiSuccess, apiError } from '@/lib/server/api-response';
 import { getBookEngine } from '@/lib/deeptutor/bootstrap';
 import { BookDbService } from '@/lib/deeptutor/services/book-db-service';
@@ -35,7 +37,8 @@ export async function GET(request: NextRequest, { params }: Params) {
         return apiError('Book not found', 404, 'NOT_FOUND');
       }
 
-      return apiSuccess(result);
+      const dbRecord = await new BookDbService().getBook(bookId);
+      return apiSuccess({ ...result, book: { ...result.book, revision: (dbRecord as unknown as { revision: number }).revision } });
     } catch (err) {
       log.error('[book] GET :id error:', err);
       return apiError('Failed to load book', 500);
@@ -56,7 +59,7 @@ export async function DELETE(request: NextRequest, { params }: Params) {
       }
 
       const engine = getBookEngine();
-      const deleted = await engine.getStorage().deleteBook(bookId);
+      const deleted = await mutateBook(request, user.id, bookId, () => engine.getStorage().deleteBook(bookId));
 
       if (!deleted) {
         return apiError('Book not found', 404, 'NOT_FOUND');
@@ -68,6 +71,7 @@ export async function DELETE(request: NextRequest, { params }: Params) {
 
       return apiSuccess({ deleted: true });
     } catch (err) {
+      if (err instanceof HistoryConflict) return apiError(err.message, 409);
       log.error('[book] DELETE :id error:', err);
       return apiError('Failed to delete book', 500);
     }

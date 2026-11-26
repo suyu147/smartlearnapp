@@ -3,6 +3,8 @@
 import { createContext, useContext, useEffect, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { type Locale, defaultLocale, supportedLocales } from '@/lib/i18n';
+import { useAuthStore } from '@/lib/store/auth-store';
+import { useSettingsStoreV2 } from '@/lib/store/settings-store';
 import '@/lib/i18n/config';
 
 const LOCALE_STORAGE_KEY = 'locale';
@@ -30,23 +32,25 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation();
 
   const locale = (i18n.language || defaultLocale) as Locale;
+  const userId = useAuthStore(state => state.user?.id);
+  const serverLanguage = useSettingsStoreV2(state => state.language);
+  const settingsHydrated = useSettingsStoreV2(state => state.hydrated);
 
-  // Detect language after hydration to avoid SSR mismatch.
-  // i18next handles fallback automatically: if the detected language
-  // has no matching JSON file, it falls back to fallbackLng.
+  // Authenticated accounts prefer their server-backed locale. Anonymous UI may use the browser setting.
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
-      const raw = stored || navigator.language || defaultLocale;
-      const target = resolveLocale(raw);
-      if (target !== i18n.language) i18n.changeLanguage(target);
-    } catch {
-      // localStorage unavailable, keep default
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(LOCALE_STORAGE_KEY); } catch { /* storage may be unavailable */ }
+    if (userId) {
+      if (settingsHydrated) i18n.changeLanguage(resolveLocale(serverLanguage));
+      return;
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    const target = resolveLocale(raw || (typeof navigator !== 'undefined' ? navigator.language : defaultLocale) || defaultLocale);
+    if (target !== i18n.language) i18n.changeLanguage(target);
+  }, [userId, settingsHydrated, serverLanguage, i18n]);
 
   const setLocale = (newLocale: Locale) => {
     i18n.changeLanguage(newLocale);
+    if (userId) useSettingsStoreV2.getState().setLanguage(newLocale);
     try {
       localStorage.setItem(LOCALE_STORAGE_KEY, newLocale);
     } catch {

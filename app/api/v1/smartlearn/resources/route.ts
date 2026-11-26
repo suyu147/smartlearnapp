@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticate } from '@/lib/deeptutor/services/auth';
+import prisma from '@/lib/utils/database';
 import { compileLearningGraph } from '@/lib/learning-graph/graph';
 import { createLearnEventWriter } from '@/lib/deeptutor/capabilities/smartlearn/event-mapper';
 import { createStreamEvent } from '@/lib/deeptutor/core/types';
@@ -22,11 +24,15 @@ interface ResourceGenerationRequest {
   resourceFeedback?: PriorNodeFeedback[];
   nodeDecisionOverrides?: Record<string, ResourceType[]>;
   generatePptImages?: boolean;
+  pptMaxPages?: number;
+  enablePptInteractive?: boolean;
+  enablePptQuiz?: boolean;
   aiConfig?: { providerId?: string; modelId?: string; apiKey?: string; baseUrl?: string };
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const userId = (await authenticate(req)).id;
     const body = (await req.json()) as ResourceGenerationRequest;
 
     // Validate required fields
@@ -38,6 +44,9 @@ export async function POST(req: NextRequest) {
     }
 
     const sessionId = body.sessionId ?? `res_${Date.now()}`;
+    if (body.sessionId && !await prisma.dtSession.findFirst({ where: { id: body.sessionId, userId, deletedAt: null } })) {
+      return NextResponse.json({ error: 'Learning session not found' }, { status: 404 });
+    }
     const turnId = `turn_res_${Date.now()}`;
 
     log.info(`Resources POST: sessionId=${sessionId}, goal="${body.goal.slice(0, 60)}"`);
@@ -73,6 +82,9 @@ export async function POST(req: NextRequest) {
       resourceFeedback: body.resourceFeedback ?? [],
       nodeDecisionOverrides: body.nodeDecisionOverrides ?? {},
       generatePptImages: body.generatePptImages ?? false,
+      pptMaxPages: body.pptMaxPages,
+      enablePptInteractive: body.enablePptInteractive ?? true,
+      enablePptQuiz: body.enablePptQuiz ?? true,
       currentNode,
       learnerSnapshot: null,
       resourcePlan: null,
@@ -93,6 +105,7 @@ export async function POST(req: NextRequest) {
       await graph.invoke(initialState as LearningStateType, {
         configurable: {
           writer: learnEventWriter,
+          userId,
           sessionId,
           turnId,
         },

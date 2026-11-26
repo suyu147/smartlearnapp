@@ -25,6 +25,7 @@ export async function evaluateNode(
       await persistLearningEvaluation({
         userId: getUserId(config),
         sessionId: state.sessionId,
+        attemptId: state.attemptId,
         topics: state.currentNode?.knowledgePoints ?? [],
         quizResults: [],
         evaluation: { ...fallback, overallScore: 100 },
@@ -40,6 +41,7 @@ export async function evaluateNode(
       await persistLearningEvaluation({
         userId: getUserId(config),
         sessionId: state.sessionId,
+        attemptId: state.attemptId,
         topics: state.currentNode?.knowledgePoints ?? [],
         quizResults: state.quizResults.map((result) => ({
           topic: result.knowledgePoints[0] ?? 'general',

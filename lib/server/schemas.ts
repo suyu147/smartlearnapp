@@ -67,6 +67,7 @@ export const CoWriterCreateSchema = z.object({
 );
 
 export const CoWriterUpdateSchema = z.object({
+  expectedVersion: z.number().int().positive().optional(),
   title: z.string().optional(),
   content: z.string().optional(),
 }).refine(
@@ -75,6 +76,7 @@ export const CoWriterUpdateSchema = z.object({
 );
 
 export const CoWriterEditSchema = z.object({
+  expectedVersion: z.number().int().positive().optional(),
   text: z.string().min(1, 'text is required'),
   instruction: z.string().optional().default(''),
   action: z.enum(['rewrite', 'shorten', 'expand', 'summarize']),
@@ -88,6 +90,7 @@ export const CoWriterEditSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const TurnCreateSchema = z.object({
+  regenerateMessageId: z.string().regex(/^[0-9]+$/).optional(),
   sessionId: z.string().min(1, 'sessionId is required'),
   message: z.string().min(1, 'message is required'),
   capability: z.string().optional(),
@@ -122,9 +125,13 @@ export const SmartLearnRequestSchema = z.object({
   resourceFeedback: z.unknown().optional(),
   nodeDecisionOverrides: z.unknown().optional(),
   generatePptImages: z.boolean().optional(),
+  pptMaxPages: z.number().int().min(1).max(30).optional(),
+  enablePptInteractive: z.boolean().optional(),
+  enablePptQuiz: z.boolean().optional(),
 });
 
 export const SmartLearnEvaluateSchema = z.object({
+  attemptId: z.string().optional(),
   sessionId: z.string().optional(),
   quizResults: z.unknown(),
   profile: z.unknown(),
@@ -163,6 +170,7 @@ export const HistoryQuerySchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const SessionCreateSchema = z.object({
+  id: z.string().min(1).optional(),
   title: z.string().optional(),
   capability: z.string().optional(),
   preferences: z.record(z.unknown()).optional(),
@@ -206,6 +214,8 @@ export const NotebookUpdateSchema = z.object({
 });
 
 export const NoteCreateSchema = z.object({
+  recordId: z.string().optional(),
+  expectedUpdatedAt: z.string().datetime().optional(),
   title: z.string().optional(),
   content: z.string().min(1, 'content is required'),
   tags: z.array(z.string()).optional(),
@@ -258,16 +268,19 @@ export const MCPServerCreateSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const SettingsUpdateSchema = z.object({
-  provider: z.string().optional(),
-  model: z.string().optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  maxTokens: z.number().int().min(1).optional(),
-  theme: z.string().optional(),
-  language: z.string().optional(),
-}).refine(
-  (data) => Object.keys(data).length > 0,
-  { message: 'at least one setting field is required' },
-);
+  expectedRevision: z.number().int().nonnegative().optional(),
+  provider: z.string().optional(), model: z.string().optional(), defaultModel: z.string().optional(),
+  temperature: z.number().min(0).max(2).optional(), maxTokens: z.number().int().min(1).optional(),
+  theme: z.enum(['light', 'dark', 'snow', 'glass', 'system']).optional(), language: z.string().optional(),
+  thinkingMode: z.boolean().optional(), autoContextWindow: z.boolean().optional(), contextWindowThreshold: z.number().min(0).max(1).optional(), rateLimitEnabled: z.boolean().optional(),
+  smartlearnProviderId: z.string().optional(), smartlearnModelId: z.string().optional(), smartlearnBaseUrl: z.string().optional(),
+  generatePptImages: z.boolean().optional(), pptMaxPages: z.number().int().min(1).max(30).nullable().optional(), enablePptInteractive: z.boolean().optional(), enablePptQuiz: z.boolean().optional(),
+  maxTurns: z.preprocess(v => v === '' ? undefined : v, z.coerce.number().int().min(1).max(1000).optional()),
+  maxResourceConcurrency: z.number().int().min(1).max(20).optional(),
+  selectedAgentIds: z.array(z.string()).optional(), disabledAgentIds: z.array(z.string()).optional(),
+  ttsProviderId: z.string().optional(), ttsVoice: z.string().optional(), ttsSpeed: z.number().min(0.25).max(4).optional(),
+  asrProviderId: z.string().optional(), asrLanguage: z.string().optional(), sparkModelId: z.string().optional(),
+}).refine(data => Object.keys(data).some(key => key !== 'expectedRevision'), { message: 'at least one setting field is required' });
 
 // ---------------------------------------------------------------------------
 // Verify model

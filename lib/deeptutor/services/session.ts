@@ -140,6 +140,7 @@ export async function ensureSession(
 
   const existing = await prisma.dtSession.findUnique({ where: { id: sessionId } });
   if (existing) {
+    if (existing.userId !== userId || existing.deletedAt) throw new Error("Session not found or deleted");
     // Touch updatedAt so incremental snapshot queries detect this session
     return prisma.dtSession.update({
       where: { id: sessionId },
@@ -158,7 +159,7 @@ export async function listSessions(
   options: { limit?: number; offset?: number } = {},
 ): Promise<SessionRecord[]> {
   return prisma.dtSession.findMany({
-    where: { userId },
+    where: { userId, deletedAt: null, mode: 'chat' },
     orderBy: { createdAt: 'desc' },
     take: options.limit ?? 50,
     skip: options.offset ?? 0,
@@ -220,7 +221,7 @@ export async function updateSessionPreferences(
 /** Delete a session and all its turns/messages/events (cascade). */
 export async function deleteSession(sessionId: string): Promise<boolean> {
   try {
-    await prisma.dtSession.delete({ where: { id: sessionId } });
+    await prisma.dtSession.update({ where: { id: sessionId }, data: { deletedAt: new Date(), revision: { increment: 1 } } });
     log.debug(`Session deleted: ${sessionId}`);
     return true;
   } catch {
@@ -342,10 +343,12 @@ export async function addMessage(
   if (options.attachments) msgData.attachments = options.attachments;
   if (options.metadata) msgData.metadata = options.metadata;
 
-  const message = await prisma.dtMessage.create({
-    data: msgData as Parameters<typeof prisma.dtMessage.create>[0]['data'],
+  return prisma.$transaction(async tx => {
+    const session = await tx.dtSession.updateMany({ where: { id: sessionId, userId, deletedAt: null }, data: { updatedAt: new Date() } });
+    if (session.count !== 1) throw new Error('Session not found or deleted');
+    const message = await tx.dtMessage.create({ data: msgData as Parameters<typeof prisma.dtMessage.create>[0]['data'] });
+    return message.id;
   });
-  return message.id;
 }
 
 /** Get messages for a session, ordered chronologically. */

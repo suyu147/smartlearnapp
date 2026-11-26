@@ -1,91 +1,15 @@
-import { createLogger } from '@/lib/logger';
+import { apiGet, apiPost, apiDelete } from '@/lib/api-client';
 import type { Resource } from '@/lib/types/resource';
-import { getApiToken } from '@/lib/auth-token';
-
-const log = createLogger('ResourcesAPI');
-
-/**
- * Build auth headers for raw fetch calls.
- */
-function authHeaders(): Record<string, string> {
-  const token = getApiToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+export async function fetchResources(_userId: string, sessionId?: string): Promise<Resource[]> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+  const data = await apiGet<{ resources: Resource[] }>(`/api/v1/resources/sync${query}`);
+  return data.resources;
 }
-
-/**
- * Fetch all resources for a user from the server.
- * Uses /api/v1/resources/sync endpoint.
- */
-export async function fetchResources(userId: string): Promise<Resource[]> {
-  try {
-    const res = await fetch(
-      `/api/v1/resources/sync?userId=${encodeURIComponent(userId)}`,
-      { headers: { ...authHeaders() } },
-    );
-    if (!res.ok) {
-      log.warn(`fetchResources failed: HTTP ${res.status}`);
-      return [];
-    }
-    const json = await res.json();
-    return json?.data?.resources ?? [];
-  } catch (err) {
-    log.error('fetchResources failed:', err);
-    return [];
-  }
+export async function saveResources(_userId: string, resources: Resource[]): Promise<Resource[]> {
+  const data = await apiPost<{ resources: Resource[] }>('/api/v1/resources/sync', { resources });
+  return data.resources;
 }
-
-/**
- * Delete resources from the server.
- * - ids provided: delete only those resources
- * - ids omitted: delete all resources of the current user
- */
 export async function deleteResources(ids?: string[]): Promise<boolean> {
-  try {
-    const query =
-      ids && ids.length > 0
-        ? `?ids=${encodeURIComponent(ids.join(','))}`
-        : '';
-    const res = await fetch(`/api/v1/resources/sync${query}`, {
-      method: 'DELETE',
-      headers: { ...authHeaders() },
-    });
-    if (!res.ok) {
-      log.warn(`deleteResources failed: HTTP ${res.status}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    log.error('deleteResources failed:', err);
-    return false;
-  }
-}
-
-/**
- * Save resources to the server.
- * Uses POST /api/v1/resources/sync endpoint.
- * Returns true if the save was successful.
- */
-export async function saveResources(
-  userId: string,
-  resources: Resource[],
-): Promise<boolean> {
-  try {
-    const res = await fetch('/api/v1/resources/sync', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': userId,
-        ...authHeaders(),
-      },
-      body: JSON.stringify({ resources }),
-    });
-    if (!res.ok) {
-      log.warn(`saveResources failed: HTTP ${res.status}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    log.error('saveResources failed:', err);
-    return false;
-  }
+  await apiDelete(`/api/v1/resources/sync${ids ? `?ids=${encodeURIComponent(ids.join(','))}` : ''}`);
+  return true;
 }

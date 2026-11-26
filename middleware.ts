@@ -112,22 +112,24 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   // --- disabled mode ---
   if (mode === 'disabled') {
     const effectiveToken = token ?? (await cachedAutoToken('disabled', host));
-    const next = NextResponse.next();
-    next.headers.set('authorization', `Bearer ${effectiveToken}`);
-    next.headers.set('x-user-id', 'local-admin');
-    next.headers.set('x-auth-role', 'admin');
-    next.headers.set('x-auth-mode', 'disabled');
+    const headers = new Headers(request.headers);
+    headers.set('authorization', `Bearer ${effectiveToken}`);
+    headers.set('x-user-id', 'local-admin');
+    headers.set('x-auth-role', 'admin');
+    headers.set('x-auth-mode', 'disabled');
+    const next = NextResponse.next({ request: { headers } });
     return next;
   }
 
   // --- single-user mode ---
   if (mode === 'single') {
     const effectiveToken = token ?? (await cachedAutoToken('single', host));
-    const next = NextResponse.next();
-    next.headers.set('authorization', `Bearer ${effectiveToken}`);
-    next.headers.set('x-user-id', 'local-single-user');
-    next.headers.set('x-auth-role', 'admin');
-    next.headers.set('x-auth-mode', 'single');
+    const headers = new Headers(request.headers);
+    headers.set('authorization', `Bearer ${effectiveToken}`);
+    headers.set('x-user-id', 'local-single-user');
+    headers.set('x-auth-role', 'admin');
+    headers.set('x-auth-mode', 'single');
+    const next = NextResponse.next({ request: { headers } });
     return next;
   }
 
@@ -152,10 +154,11 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
       return jsonError('Malformed token payload', 401);
     }
 
-    const next = NextResponse.next();
-    next.headers.set('x-user-id', userId);
-    next.headers.set('x-auth-role', role);
-    next.headers.set('x-auth-mode', 'multi');
+    const headers = new Headers(request.headers);
+    headers.set('x-user-id', userId);
+    headers.set('x-auth-role', role);
+    headers.set('x-auth-mode', 'multi');
+    const next = NextResponse.next({ request: { headers } });
     return next;
   } catch {
     return jsonError('Invalid or expired token', 401);

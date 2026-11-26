@@ -35,6 +35,8 @@ export async function generateSceneOutlinesFromRequirements(
     imageGenerationEnabled?: boolean;
     videoGenerationEnabled?: boolean;
     includeInteractive?: boolean;
+    includeQuiz?: boolean;
+    maxScenes?: number;
     researchContext?: string;
     teacherContext?: string;
   },
@@ -96,6 +98,18 @@ export async function generateSceneOutlinesFromRequirements(
   }
 
   // Use simplified prompt variables
+  const includeQuiz = options?.includeQuiz !== false;
+  const maxScenes = options?.maxScenes;
+  const sceneCountPolicy = maxScenes
+    ? `Generate at most ${maxScenes} scenes in total. Do not exceed this limit.`
+    : 'Arrange an appropriate number of scenes based on inferred duration (typically 1-2 scenes per minute).';
+  const quizPolicy = includeQuiz
+    ? 'Insert quizzes at appropriate points for knowledge checks — every course MUST include at least 1 quiz scene near the end to test understanding.'
+    : 'Do NOT generate any quiz scenes. Do not output quizConfig.';
+  const interactivePolicy = options?.includeInteractive !== false
+    ? 'Use interactive scenes sparingly (max 1-2 per course) and only when the concept truly benefits from hands-on interaction.'
+    : 'Do NOT generate any interactive scenes. Do not output interactiveConfig.';
+
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
     // New simplified variables
     requirement: requirements.requirement,
@@ -112,6 +126,9 @@ export async function generateSceneOutlinesFromRequirements(
       options?.researchContext || (requirements.language === 'zh-CN' ? '无' : 'None'),
     // Server-side generation populates this via options; client-side populates via formatTeacherPersonaForPrompt
     teacherContext: options?.teacherContext || '',
+    sceneCountPolicy,
+    quizPolicy,
+    interactivePolicy,
   });
 
   if (!prompts) {
@@ -151,7 +168,17 @@ export async function generateSceneOutlinesFromRequirements(
     const uniquified = uniquifyMediaElementIds(withRequiredInteractive);
 
     // Deduplicate outlines with similar keyPoints
-    const result = deduplicateOutlines(uniquified);
+    const deduplicated = deduplicateOutlines(uniquified);
+
+    // Enforce the requested scene-type policy and page cap again after all enrichments
+    const typeFiltered = deduplicated.filter((outline) => {
+      if (options?.includeInteractive === false && outline.type === 'interactive') return false;
+      if (options?.includeQuiz === false && outline.type === 'quiz') return false;
+      return true;
+    });
+    const result = options?.maxScenes
+      ? typeFiltered.slice(0, options.maxScenes)
+      : typeFiltered;
 
     callbacks?.onProgress?.({
       currentStage: 1,

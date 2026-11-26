@@ -23,6 +23,7 @@ export interface ChatMessage {
 }
 
 interface ChatState {
+  sessionId: string | null;
   messages: ChatMessage[];
   isStreaming: boolean;
   currentCapability: string;
@@ -40,6 +41,7 @@ interface ChatState {
 export const useChatStore = create<ChatState>()(
   persist(
     (set) => ({
+      sessionId: null,
       messages: [],
       isStreaming: false,
       currentCapability: 'chat',
@@ -68,8 +70,8 @@ export const useChatStore = create<ChatState>()(
 
       clearMessages: () => set({ messages: [] }),
 
-      resetForNewUser: () => set({ messages: [], isStreaming: false, currentCapability: 'chat', selectedModel: 'gpt-4o' }),
+      resetForNewUser: () => set({ sessionId: null, messages: [], isStreaming: false, currentCapability: 'chat', selectedModel: 'gpt-4o' }),
     }),
-    { name: 'chat-storage' }
+    { name: 'chat-messages-cloud-v1', partialize: state => ({ currentCapability: state.currentCapability, selectedModel: state.selectedModel }) }
   )
 );

@@ -57,6 +57,7 @@ const INITIAL_STATE: StreamState = {
 
 /** Shared params for submitTurn */
 interface TurnParams {
+  regenerateMessageId?: string;
   sessionId: string;
   message: string;
   capability?: string;
@@ -264,6 +265,11 @@ export function useTurnStream() {
         const message = err instanceof Error ? err.message : 'Stream failed';
         setState((s) => ({ ...s, error: message, isStreaming: false }));
         setStreaming(false);
+      } finally {
+        if (abortRef.current === controller) {
+          setState(s => ({ ...s, isStreaming: false }));
+          setStreaming(false);
+        }
       }
     },
     [handleEvent, setStreaming],
@@ -301,7 +307,7 @@ export function useTurnStream() {
       removeMessage(assistantMessageId);
 
       // Re-execute the stream (does NOT add a new user message)
-      await _startStream(params);
+      await _startStream({ ...params, regenerateMessageId: assistantMessageId });
     },
     [removeMessage, _startStream],
   );

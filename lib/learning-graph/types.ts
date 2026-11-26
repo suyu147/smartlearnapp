@@ -39,6 +39,12 @@ export interface LearnRequest {
   nodeDecisionOverrides?: Record<string, ResourceType[]>;
   /** Whether to generate AI images for PPT slides. Defaults to false. */
   generatePptImages?: boolean;
+  /** Maximum number of PPT pages. Undefined/0 means use the default outline rules. */
+  pptMaxPages?: number;
+  /** Whether PPT may include interactive HTML scenes. Defaults to true. */
+  enablePptInteractive?: boolean;
+  /** Whether PPT may include quiz scenes. Defaults to true. */
+  enablePptQuiz?: boolean;
 }
 
 export interface LearnerSnapshot {

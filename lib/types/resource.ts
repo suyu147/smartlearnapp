@@ -87,6 +87,9 @@ export interface StructuredReading {
 
 export interface Resource {
   id: string;
+  sessionId?: string | null;
+  revision?: number;
+  updatedAt?: string;
   userId: string;
   type: ResourceType;
   title: string;

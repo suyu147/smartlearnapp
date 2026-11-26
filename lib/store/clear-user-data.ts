@@ -7,6 +7,14 @@
 // IMPORTANT: Keep in sync with the `name` option in each store's persist() middleware
 const PERSISTED_STORE_KEYS = [
   'auth-jwt',
+  'settings-cloud-v1',
+  'learning-sessions-cloud-v1',
+  'learning-path-cloud-v1',
+  'resources-cloud-v1',
+  'resource-decisions-cloud-v1',
+  'learning-profile-cloud-v1',
+  'chat-messages-cloud-v1',
+  'chat-sessions-cloud-v1',
   'user-profile-storage',
   'learning-profile-storage',
   'chat-storage',

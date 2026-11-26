@@ -12,10 +12,12 @@ import { SmartLearnEvaluateSchema } from '@/lib/server/schemas';
 import { createSSEStream } from '@/lib/server/sse-stream';
 
 import { authenticate } from '@/lib/deeptutor/services/auth';
+import prisma from '@/lib/utils/database';
 
 const log = createLogger('api:smartlearn:evaluate');
 
 interface EvaluateRequest {
+  attemptId?: string;
   sessionId?: string;
   quizResults: QuizResultPayload[];
   profile: ProfileDimensions;
@@ -31,17 +33,19 @@ export async function POST(req: NextRequest) {
     const validated = await validatedBody(SmartLearnEvaluateSchema, req);
     const body = validated as unknown as EvaluateRequest;
 
-    const userId = await (async () => {
-      try { return (await authenticate(req)).id; } catch { return 'anonymous'; }
-    })();
+    const userId = (await authenticate(req)).id;
 
     const sessionId = body.sessionId ?? `eval_${Date.now()}`;
+    if (body.sessionId && !await prisma.dtSession.findFirst({ where: { id: body.sessionId, userId, deletedAt: null } })) {
+      return NextResponse.json({ error: 'Learning session not found' }, { status: 404 });
+    }
     const turnId = `turn_eval_${Date.now()}`;
 
     log.info(`Evaluate POST: sessionId=${sessionId}, quizResults=${body.quizResults.length}`);
 
     const initialState: Partial<LearningStateType> = {
       action: 'node_complete',
+      attemptId: body.attemptId,
       sessionId,
       profile: body.profile,
       goal: body.goal,

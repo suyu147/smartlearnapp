@@ -5,6 +5,7 @@
 import { createLogger } from '@/lib/logger';
 import prisma from '@/lib/db/client';
 import { Prisma } from '@prisma/client';
+import { HistoryConflict } from '@/lib/history/server';
 
 const log = createLogger('CowriterDbService');
 
@@ -65,18 +66,21 @@ export class CowriterDbService {
     }
   }
 
-  async updateDocument(docId: string, data: Partial<{ title: string; content: string; status: string; metadata: Record<string, unknown> }>): Promise<CowriterDocRecord | null> {
+  async updateDocument(docId: string, data: Partial<{ title: string; content: string; status: string; metadata: Record<string, unknown> }>, expectedVersion?: number): Promise<CowriterDocRecord | null> {
     try {
       const updateData: Record<string, unknown> = { version: { increment: 1 }, lastEdited: new Date() };
       if (data.title !== undefined) updateData.title = data.title;
       if (data.content !== undefined) updateData.content = data.content;
       if (data.status !== undefined) updateData.status = data.status;
       if (data.metadata !== undefined) updateData.metadata = JSON.parse(JSON.stringify(data.metadata));
-      return await prisma.cowriterDocument.update({
-        where: { id: docId },
-        data: updateData as Prisma.CowriterDocumentUpdateInput,
-      }) as CowriterDocRecord;
+      const current = await prisma.cowriterDocument.findUnique({ where: { id: docId } });
+      if (!current) return null;
+      const result = await prisma.cowriterDocument.updateMany({ where: { id: docId, version: expectedVersion ?? current.version }, data: updateData as Prisma.CowriterDocumentUpdateManyMutationInput });
+      if (!result.count) throw new HistoryConflict('文档已在其他设备修改或删除，请刷新');
+      return await prisma.cowriterDocument.findUnique({ where: { id: docId } }) as CowriterDocRecord;
+
     } catch (err) {
+      if (err instanceof HistoryConflict) throw err;
       log.error('updateDocument failed:', err);
       return null;
     }

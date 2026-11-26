@@ -12,6 +12,7 @@ function nextReviewDate(reviewCount: number, now: Date): Date {
 export interface LearningGraphPersistenceInput {
   userId: string;
   sessionId: string;
+  attemptId?: string;
   topics: string[];
   quizResults: Array<{
     topic: string;
@@ -38,15 +39,20 @@ export async function persistLearningEvaluation(input: LearningGraphPersistenceI
     create: { id: input.userId, name: input.userId },
   });
 
+  const attemptSessionId = input.attemptId ? `${input.userId}:quiz:${input.attemptId}` : input.sessionId;
+  const savedAttempt = input.attemptId ? await prisma.learningMasterySession.findUnique({ where: { id: attemptSessionId } }) : null;
+  const wasEvaluated = !!(savedAttempt?.metadata && (savedAttempt.metadata as { evaluated?: boolean }).evaluated);
+  const expectedOwner = await prisma.learningMasterySession.findUnique({ where: { id: attemptSessionId }, select: { userId: true } });
+  if (expectedOwner && expectedOwner.userId !== input.userId) throw new Error('Evaluation session ownership mismatch');
   await prisma.learningMasterySession.upsert({
-    where: { id: input.sessionId },
+    where: { id: attemptSessionId },
     update: {
       topics: input.topics,
       ...(input.evaluation ? { evaluation: input.evaluation } : {}),
       completedAt: now,
     },
     create: {
-      id: input.sessionId,
+      id: attemptSessionId,
       userId: input.userId,
       topics: input.topics,
       ...(input.evaluation ? { evaluation: input.evaluation } : {}),
@@ -54,10 +60,14 @@ export async function persistLearningEvaluation(input: LearningGraphPersistenceI
     },
   });
 
+  if (input.attemptId) {
+    await prisma.learningMasterySession.update({ where: { id: attemptSessionId }, data: { metadata: { sessionId: input.sessionId, evaluated: true } } });
+  }
+  if (wasEvaluated) return;
   for (const result of input.quizResults) {
-    await prisma.learningQuizAttempt.create({
+    if (!savedAttempt) await prisma.learningQuizAttempt.create({
       data: {
-        masterySessionId: input.sessionId,
+        masterySessionId: attemptSessionId,
         userId: input.userId,
         topic: result.topic,
         question: result.question,

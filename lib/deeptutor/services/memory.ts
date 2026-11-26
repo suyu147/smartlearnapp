@@ -100,7 +100,10 @@ export class MemoryServiceImpl {
     try {
       const content = await readFile(filePath, 'utf-8');
       const lines = content.trim().split('\n').filter(Boolean);
-      const events = lines.map((l) => JSON.parse(l) as TraceEvent);
+      const events = lines
+        .map((l) => JSON.parse(l) as TraceEvent)
+        // Snapshot diffs only record fingerprints/labels, never memory content.
+        .filter((event) => !event.kind?.startsWith('snapshot_'));
       return events.slice(-limit);
     } catch {
       return [];
@@ -434,6 +437,46 @@ export class MemoryServiceImpl {
   }
 
   /**
+   * Delete a single L1 trace event by id. Returns false if no matching event.
+   */
+  async deleteTrace(userId: string, surface: Surface, entryId: string): Promise<boolean> {
+    const filePath = join(this.userDir(userId, 'L1'), `${surface}.jsonl`);
+
+    try {
+      const content = await readFile(filePath, 'utf-8');
+      const lines = content.split('\n').filter(Boolean);
+      const kept = lines.filter((line) => {
+        try {
+          return (JSON.parse(line) as TraceEvent).id !== entryId;
+        } catch {
+          return true;
+        }
+      });
+
+      if (kept.length === lines.length) return false;
+
+      await writeFile(filePath, kept.length > 0 ? `${kept.join('\n')}\n` : '', 'utf-8');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete the L2 summary of a surface. Returns false if it does not exist.
+   */
+  async deleteL2(userId: string, surface: string): Promise<boolean> {
+    return this.removeFile(join(this.userDir(userId, 'L2'), `${surface}.md`));
+  }
+
+  /**
+   * Delete an L3 synthesis slot. Returns false if it does not exist.
+   */
+  async deleteL3(userId: string, slot: L3Slot): Promise<boolean> {
+    return this.removeFile(join(this.userDir(userId, 'L3'), `${slot}.md`));
+  }
+
+  /**
    * Delete all memory data for a user.
    * Useful for testing and data hygiene.
    */
@@ -461,6 +504,12 @@ export class MemoryServiceImpl {
     } catch {
       return '';
     }
+  }
+
+  private async removeFile(filePath: string): Promise<boolean> {
+    if (!existsSync(filePath)) return false;
+    await rm(filePath, { force: true });
+    return true;
   }
 }
 

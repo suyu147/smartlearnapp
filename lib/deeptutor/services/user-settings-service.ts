@@ -4,6 +4,7 @@
 
 import { createLogger } from '@/lib/logger';
 import prisma from '@/lib/db/client';
+import { Prisma } from '@prisma/client';
 
 const log = createLogger('UserSettingsService');
 
@@ -19,6 +20,11 @@ export interface UserSettingsData {
   smartlearnModelId?: string;
   smartlearnBaseUrl?: string;
   generatePptImages?: boolean;
+  pptMaxPages?: number | null;
+  enablePptInteractive?: boolean;
+  enablePptQuiz?: boolean;
+  revision?: number;
+  sparkModelId?: string;
   maxTurns?: number;
   maxResourceConcurrency?: number;
   ttsProviderId?: string;
@@ -53,6 +59,11 @@ export class UserSettingsService {
         smartlearnModelId: record.smartlearnModelId ?? undefined,
         smartlearnBaseUrl: record.smartlearnBaseUrl ?? undefined,
         generatePptImages: record.generatePptImages,
+        pptMaxPages: record.pptMaxPages,
+        enablePptInteractive: record.enablePptInteractive,
+        enablePptQuiz: record.enablePptQuiz,
+        revision: record.revision,
+        sparkModelId: (record.extra as { sparkModelId?: string } | null)?.sparkModelId,
         maxTurns: record.maxTurns,
         maxResourceConcurrency: record.maxResourceConcurrency,
         ttsProviderId: record.ttsProviderId ?? undefined,
@@ -70,43 +81,24 @@ export class UserSettingsService {
       };
     } catch (err) {
       log.error('getSettings failed:', err);
-      return null;
+      throw err;
     }
   }
 
-  async updateSettings(userId: string, data: UserSettingsData): Promise<boolean> {
-    try {
-      // Ensure user exists
-      await prisma.user.upsert({
-        where: { id: userId },
-        update: {},
-        create: { id: userId, name: 'anonymous' },
-      });
-
-      await prisma.userSettings.upsert({
-        where: { userId },
-        update: {
-          ...this.toDbFields(data),
-        },
-        create: {
-          userId,
-          ...this.toDbFields(data),
-        },
-      });
-      return true;
-    } catch (err) {
-      log.error('updateSettings failed:', err);
-      return false;
+  async updateSettings(userId: string, data: UserSettingsData, expectedRevision: number): Promise<boolean> {
+    await prisma.user.upsert({ where: { id: userId }, update: {}, create: { id: userId, name: userId } });
+    const { revision: _revision, sparkModelId, ...preferences } = data;
+    const fields: Record<string, unknown> = { ...preferences, ...(sparkModelId !== undefined ? { extra: { sparkModelId } } : {}) };
+    for (const key of ['ttsProvidersConfig', 'asrProvidersConfig'] as const) {
+      if (fields[key] !== undefined) fields[key] = JSON.parse(JSON.stringify(fields[key])) as Prisma.InputJsonValue;
     }
-  }
-
-  private toDbFields(data: UserSettingsData): Record<string, unknown> {
-    const fields: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (value !== undefined) {
-        fields[key] = value;
-      }
+    if (!expectedRevision) {
+      const existing = await prisma.userSettings.updateMany({ where: { userId, revision: 0 }, data: { ...fields, revision: 1 } });
+      if (existing.count === 1) return true;
+      try { await prisma.userSettings.create({ data: { ...fields, userId, revision: 1 } }); return true; }
+      catch (error) { if ((error as { code?: string }).code === 'P2002') return false; throw error; }
     }
-    return fields;
+    const result = await prisma.userSettings.updateMany({ where: { userId, revision: expectedRevision }, data: { ...fields, revision: { increment: 1 } } });
+    return result.count === 1;
   }
 }

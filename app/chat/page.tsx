@@ -27,14 +27,16 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useChatStore } from '@/lib/store/chat-store';
+import { useChatHistory } from '@/lib/hooks/use-chat-history';
+import { toast } from 'sonner';
 import { useSessionStore } from '@/lib/store/session-store';
 import { useSettingsStoreV2 } from '@/lib/store/settings-store';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useKnowledgeStore } from '@/lib/store/knowledge-store';
-import { useTurnStream, type ToolCallInfo } from '@/lib/hooks/use-turn-stream';
+import { useTurnStream } from '@/lib/hooks/use-turn-stream';
 import { EnhancedMarkdownMessage } from '@/components/chat/markdown-message';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
-import { SourceCard, type SourceItem } from '@/components/chat/source-card';
+import { SourceCard } from '@/components/chat/source-card';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,15 +64,11 @@ const capabilities: {
 export default function ChatPage() {
   // Store selectors
   const messages = useChatStore((s) => s.messages);
-  const isStreamingStore = useChatStore((s) => s.isStreaming);
   const activeCapability = useChatStore((s) => s.currentCapability);
   const setCapability = useChatStore((s) => s.setCapability);
-  const clearMessages = useChatStore((s) => s.clearMessages);
 
   const activeSessionId = useSessionStore((s) => s.activeSessionId);
   const sessions = useSessionStore((s) => s.sessions);
-  const addSession = useSessionStore((s) => s.addSession);
-  const setActiveSession = useSessionStore((s) => s.setActiveSession);
 
   const settings = useSettingsStoreV2();
   const v1Settings = useSettingsStore();
@@ -86,6 +84,10 @@ export default function ChatPage() {
 
   // Turn stream
   const stream = useTurnStream();
+  const historyApi = useChatHistory();
+  const cancelStream = stream.cancel;
+  useEffect(() => () => { cancelStream(); }, [cancelStream]);
+  const historyRun = (action: () => Promise<unknown>) => { void action().catch(error => toast.error(error instanceof Error ? error.message : "操作失败")); };
 
   // Local UI state
   const [messageInput, setMessageInput] = useState('');
@@ -111,22 +113,6 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, stream.getStreamingContent()]);
-
-  // Ensure there's an active session
-  useEffect(() => {
-    if (!activeSessionId) {
-      const newSession = {
-        id: `session-${Date.now()}`,
-        title: '新对话',
-        mode: 'chat',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        status: 'active' as const,
-      };
-      addSession(newSession);
-      setActiveSession(newSession.id);
-    }
-  }, [activeSessionId, addSession, setActiveSession]);
 
   // --- 图片处理 ---
 
@@ -310,7 +296,9 @@ export default function ChatPage() {
   const handleSend = useCallback(async () => {
     const text = messageInput.trim();
     // 允许只有图片无文字时也发送（只要有图片就可以）
-    if ((!text && pendingImages.length === 0) || stream.isStreaming) return;
+    if ((!text && pendingImages.length === 0) || stream.isStreaming || historyApi.loading) return;
+    let targetSessionId: string;
+    try { targetSessionId = await historyApi.ensureSession(); } catch (error) { toast.error(error instanceof Error ? error.message : '创建对话失败'); return; }
 
     const sentImages = pendingImages;
     const attachments = sentImages.map((img, idx) => ({
@@ -337,7 +325,7 @@ export default function ChatPage() {
     const cap = capabilities.find((c) => c.id === activeCapability);
 
     await stream.send({
-      sessionId: activeSessionId ?? `session-${Date.now()}`,
+      sessionId: targetSessionId,
       message: text || '请分析这张图片',
       capability: cap?.capabilityName,
       knowledgeBases: selectedKBs.length > 0 ? selectedKBs : undefined,
@@ -350,6 +338,7 @@ export default function ChatPage() {
       attachments: attachments.length > 0 ? attachments : undefined,
       imageUrls: imageUrls.length > 0 ? imageUrls : undefined,
     });
+    await historyApi.refresh();
   }, [
     messageInput,
     pendingImages,
@@ -357,6 +346,7 @@ export default function ChatPage() {
     messages,
     activeCapability,
     activeSessionId,
+    historyApi,
     selectedKBs,
     settings.language,
     effectiveProviderId,
@@ -369,7 +359,7 @@ export default function ChatPage() {
   // Handle regenerate
   const handleRegenerate = useCallback(
     async (assistantMsgId: string) => {
-      if (stream.isStreaming) return;
+      if (stream.isStreaming || historyApi.loading || !activeSessionId) return;
 
       // Find the assistant message and the preceding user message
       const allMsgs = messages;
@@ -394,7 +384,7 @@ export default function ChatPage() {
       const cap = capabilities.find((c) => c.id === activeCapability);
 
       await stream.regenerate(assistantMsgId, {
-        sessionId: activeSessionId ?? `session-${Date.now()}`,
+        sessionId: activeSessionId,
         message: userMsgContent,
         capability: cap?.capabilityName,
         knowledgeBases: selectedKBs.length > 0 ? selectedKBs : undefined,
@@ -405,13 +395,15 @@ export default function ChatPage() {
         baseUrl: effectiveBaseUrl,
         conversationHistory: history,
       });
+      await historyApi.refresh();
     },
-    [stream, messages, activeCapability, activeSessionId, selectedKBs, settings.language, effectiveProviderId, effectiveModelId, effectiveApiKey, effectiveBaseUrl],
+    [stream, historyApi, messages, activeCapability, activeSessionId, selectedKBs, settings.language, effectiveProviderId, effectiveModelId, effectiveApiKey, effectiveBaseUrl],
   );
 
   // Import dialog state
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState('');
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [importLoading, setImportLoading] = useState(false);
   const [importPreview, setImportPreview] = useState<{
     conversations: Array<{ title: string; messageCount: number; format: string }>;
@@ -419,6 +411,7 @@ export default function ChatPage() {
   const [importError, setImportError] = useState('');
 
   const handleImportFile = useCallback(async (file: File) => {
+    setImportFile(file);
     setImportLoading(true);
     setImportError('');
     setImportPreview(null);
@@ -448,20 +441,19 @@ export default function ChatPage() {
   }, []);
 
   const handleImportText = useCallback(async () => {
-    if (!importText.trim()) return;
+    if (!importText.trim() && !importFile) return;
     setImportLoading(true);
     setImportError('');
     setImportPreview(null);
     try {
       const token = (await import('@/lib/auth-token')).getApiToken();
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const headers: Record<string, string> = {};
+      if (!importFile) headers['Content-Type'] = 'application/json';
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const res = await fetch('/api/v1/chat/import', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ content: importText }),
-      });
+      const body = importFile ? new FormData() : JSON.stringify({ content: importText, confirm: true });
+      if (body instanceof FormData && importFile) { body.append('file', importFile); body.append('confirm', 'true'); }
+      const res = await fetch('/api/v1/chat/import', { method: 'POST', headers, body });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ error: '导入失败' }));
         throw new Error(errBody.error ?? `HTTP ${res.status}`);
@@ -469,18 +461,8 @@ export default function ChatPage() {
       const data = await res.json();
       setImportPreview(data.data ?? data);
 
-      // Load imported conversations into the session store
-      const conversations = data.data?.conversations ?? data.conversations ?? [];
-      for (const conv of conversations) {
-        addSession({
-          id: conv.id ?? `imported-${Date.now()}`,
-          title: conv.title ?? '导入的对话',
-          mode: 'chat',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: 'active' as const,
-        });
-      }
+      await historyApi.refresh();
+      setImportFile(null);
       setImportOpen(false);
       setImportText('');
     } catch (err) {
@@ -488,7 +470,7 @@ export default function ChatPage() {
     } finally {
       setImportLoading(false);
     }
-  }, [importText, addSession]);
+  }, [importText, importFile, historyApi]);
 
   // Handle key press
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -527,14 +509,20 @@ export default function ChatPage() {
             </span>
             {messages.length > 0 && (
               <button
-                onClick={clearMessages}
+                onClick={() => historyRun(() => historyApi.createSession())}
                 className="text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
               >
-                清空
+                新对话
               </button>
             )}
           </div>
           <div className="flex items-center gap-2">
+            <select aria-label="AI 对话历史" className="max-w-48 rounded-lg border bg-background px-2 py-1 text-sm" disabled={stream.isStreaming || historyApi.loading} value={activeSessionId ?? ''} onChange={event => historyApi.selectSession(event.target.value)}>
+              <option value="">选择历史对话</option>{sessions.map(session => <option key={session.id} value={session.id}>{session.title}</option>)}
+            </select>
+            <button className="text-xs underline" disabled={stream.isStreaming || historyApi.loading} onClick={() => historyRun(() => historyApi.createSession())}>新对话</button>
+            {historyApi.moreSessions && <button className="text-xs underline" onClick={() => historyRun(() => historyApi.loadMoreSessions())}>更多历史</button>}
+            {activeSessionId && <><button className="text-xs underline" disabled={stream.isStreaming || historyApi.loading} onClick={() => { const title = window.prompt('对话名称', currentSession?.title); if (title?.trim()) historyRun(() => historyApi.renameSession(activeSessionId, title.trim())); }}>重命名</button><button className="text-xs text-destructive" disabled={stream.isStreaming || historyApi.loading} onClick={() => { if (window.confirm('删除这条对话记录？')) historyRun(() => historyApi.deleteSession(activeSessionId)); }}>删除</button></>}
             <button
               onClick={() => setImportOpen(true)}
               className="p-2 rounded-lg hover:bg-[var(--muted)] transition-colors"
@@ -551,6 +539,8 @@ export default function ChatPage() {
           </div>
         </div>
 
+        {historyApi.loading && <p role="status" className="px-6 py-2 text-sm">正在加载对话…</p>}
+        {historyApi.hasMore && <button disabled={historyApi.loading} className="py-2 text-sm underline" onClick={() => historyRun(() => historyApi.loadOlder())}>加载更早的消息</button>}
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
           {messages.length === 0 && !stream.isStreaming && (
@@ -931,7 +921,7 @@ export default function ChatPage() {
                     : 'border-[var(--border)] focus:border-[var(--primary)]',
                 )}
                 rows={1}
-                disabled={stream.isStreaming}
+                disabled={stream.isStreaming || historyApi.loading}
               />
             </div>
             {stream.isStreaming ? (
@@ -944,7 +934,7 @@ export default function ChatPage() {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!messageInput.trim() && pendingImages.length === 0}
+                disabled={historyApi.loading || (!messageInput.trim() && pendingImages.length === 0)}
                 className={cn(
                   'px-4 py-2.5 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity',
                   !messageInput.trim() && pendingImages.length === 0 && 'opacity-50 cursor-not-allowed',
@@ -1122,6 +1112,7 @@ export default function ChatPage() {
                 onClick={() => {
                   setImportOpen(false);
                   setImportText('');
+                  setImportFile(null);
                   setImportPreview(null);
                   setImportError('');
                 }}
@@ -1192,6 +1183,7 @@ export default function ChatPage() {
                 onClick={() => {
                   setImportOpen(false);
                   setImportText('');
+                  setImportFile(null);
                   setImportPreview(null);
                   setImportError('');
                 }}
@@ -1201,10 +1193,10 @@ export default function ChatPage() {
               </button>
               <button
                 onClick={handleImportText}
-                disabled={!importText.trim() || importLoading}
+                disabled={(!importText.trim() && !importFile) || importLoading}
                 className={cn(
                   'px-4 py-2 rounded-lg text-[13px] font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity',
-                  (!importText.trim() || importLoading) && 'opacity-50 cursor-not-allowed',
+                  ((!importText.trim() && !importFile) || importLoading) && 'opacity-50 cursor-not-allowed',
                 )}
               >
                 {importLoading ? (

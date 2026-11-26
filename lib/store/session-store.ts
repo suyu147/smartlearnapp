@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { apiGet, apiPost, apiDelete } from '@/lib/api-client';
+import { getApiToken } from '@/lib/auth-token';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SessionStoreV2');
@@ -9,6 +10,7 @@ export interface Session {
   id: string;
   title: string;
   mode: string;
+  revision?: number;
   createdAt: string;
   updatedAt: string;
   status: 'active' | 'completed' | 'failed';
@@ -31,7 +33,7 @@ interface SessionState {
   /** Clear all sessions and reset sessionsLoaded so fetchSessions will re-fetch */
   resetSessions: () => void;
   // Server sync methods (all non-blocking / fire-and-forget)
-  fetchSessions: () => Promise<void>;
+  fetchSessions: (force?: boolean) => Promise<void>;
   createSessionOnServer: (session: Session) => Promise<void>;
   deleteSessionOnServer: (id: string) => Promise<void>;
 }
@@ -78,13 +80,15 @@ export const useSessionStore = create<SessionState>()(
       // Server sync (all non-blocking — errors caught and logged silently)
       // ------------------------------------------------------------------
 
-      fetchSessions: async () => {
-        if (fetchInProgress || get().sessionsLoaded) return;
+      fetchSessions: async (force = false) => {
+        if (fetchInProgress || (get().sessionsLoaded && !force)) return;
         fetchInProgress = true;
+        const token = getApiToken();
         try {
           const serverSessions = await apiGet<Session[]>(
             '/api/v1/sessions',
           );
+          if (getApiToken() !== token) return;
           set({ sessions: serverSessions, sessionsLoaded: true });
           log.info('Sessions fetched from server:', serverSessions.length);
         } catch (err) {
@@ -115,7 +119,7 @@ export const useSessionStore = create<SessionState>()(
       },
     }),
     {
-      name: 'sl-session-storage',
+      name: 'chat-sessions-cloud-v1',
       partialize: (state) => {
         // Exclude sessionsLoaded so fetchSessions runs on each page load.
         // Methods are functions and automatically stripped by JSON serialization.

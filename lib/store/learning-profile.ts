@@ -5,7 +5,6 @@ import type { LearningProfile, ProfileDimensions, ConversationMessage } from '@/
 import { DEFAULT_DIMENSIONS } from '@/lib/types/profile';
 import { fetchProfile, saveProfile } from '@/lib/api/learning-profile-api';
 import { createLogger } from '@/lib/logger';
-import { getApiToken } from '@/lib/auth-token';
 import { generateId } from '@/lib/utils';
 import { useAuthStore } from './auth-store';
 
@@ -162,25 +161,8 @@ export const useLearningProfileStore = create<LearningProfileState>()(
           };
         });
 
-        // 数据库写入（仅客户端，静默失败不影响本地使用）
-        if (typeof window !== 'undefined') {
-          const userId = getCurrentUserId();
-          const headers: Record<string, string> = { 'Content-Type': 'application/json', 'x-user-id': userId };
-          const token = getApiToken();
-          if (token) headers['Authorization'] = `Bearer ${token}`;
-          fetch('/api/v1/smartlearn/profile', {
-            method: 'PATCH',
-            headers,
-            body: JSON.stringify({ dimensions: mergedDimensions }),
-          }).then((response) => {
-            if (!response.ok) throw new Error(`Profile save failed (${response.status})`);
-            set({ saveError: null });
-          }).catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : 'Profile save failed';
-            log.error(message);
-            set({ saveError: message });
-          });
-        }
+        // The account history coordinator persists this update with its expected revision.
+
       },
 
       setChatOpen: (isChatOpen) => set({ isChatOpen }),
@@ -297,7 +279,7 @@ export const useLearningProfileStore = create<LearningProfileState>()(
       },
     })),
     {
-      name: 'learning-profile-storage',
+      name: 'learning-profile-cloud-v1',
       version: 2,
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Record<string, unknown>;
@@ -329,12 +311,7 @@ export const useLearningProfileStore = create<LearningProfileState>()(
         }
         return state;
       },
-      partialize: (state) => ({
-        profile: state.profile,
-        archivedProfiles: state.archivedProfiles,
-        profileHistory: state.profileHistory,
-        lastSyncedUserId: state.lastSyncedUserId,
-      }),
+      partialize: () => ({}),
     },
   ),
 );

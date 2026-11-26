@@ -1,69 +1,23 @@
-/**
- * GET  /api/v1/sessions — List user's sessions
- * POST /api/v1/sessions — Create a new session
- */
-
-import { NextRequest } from 'next/server';
-import { createLogger } from '@/lib/logger';
-import { listSessions, createSession } from '@/lib/deeptutor/services/session';
-
-const log = createLogger('SessionsRoute');
-
-function getUserId(req: NextRequest): string {
-  return req.headers.get('x-user-id') ?? 'anonymous';
-}
-
-function apiError(err: unknown, fallbackStatus: number = 500) {
-  const message = err instanceof Error ? err.message : 'Unknown error';
-  log.error('error', err);
-  return new Response(JSON.stringify({ error: message }), {
-    status: fallbackStatus,
-    headers: { 'Content-Type': 'application/json' },
+import { NextRequest, NextResponse } from 'next/server';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import prisma from '@/lib/utils/database';
+import { ensureHistoryUser } from '@/lib/history/server';
+import { SessionCreateSchema } from '@/lib/server/schemas';
+function dto(s: { id: string; title: string; mode: string; revision: number; createdAt: Date; updatedAt: Date }) { return { ...s, status: 'active', createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() }; }
+export async function GET(req: NextRequest) {
+  return withAuth(req, async (_, { user }) => {
+    const offset = Math.max(0, Number(req.nextUrl.searchParams.get('offset')) || 0);
+    const limit = Math.min(100, Math.max(1, Number(req.nextUrl.searchParams.get('limit')) || 50));
+    const sessions = await prisma.dtSession.findMany({ where: { userId: user.id, deletedAt: null, mode: 'chat' }, orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }], skip: offset, take: limit });
+    return NextResponse.json({ success: true, data: sessions.map(dto) });
   });
 }
-
-export async function GET(req: NextRequest) {
-  try {
-    const userId = getUserId(req);
-    const url = new URL(req.url);
-    const limit = url.searchParams.get('limit') ? Number(url.searchParams.get('limit')) : undefined;
-    const offset = url.searchParams.get('offset') ? Number(url.searchParams.get('offset')) : undefined;
-
-    const sessions = await listSessions(userId, { limit, offset });
-    return new Response(JSON.stringify({ success: true, data: sessions }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    log.error('GET /api/v1/sessions failed:', err);
-    return apiError(err);
-  }
-}
-
 export async function POST(req: NextRequest) {
-  try {
-    const userId = getUserId(req);
-    const { validatedBody } = await import('@/lib/server/validate');
-    const { SessionCreateSchema } = await import('@/lib/server/schemas');
-    const body = await validatedBody(SessionCreateSchema, req);
-
-    const sessionId = await createSession(userId, {
-      title: body.title,
-      capability: body.capability,
-      preferences: body.preferences,
-      metadata: body.metadata,
-    });
-    return new Response(JSON.stringify({ success: true, data: { id: sessionId } }), {
-      status: 201,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  } catch (err) {
-    if (err instanceof Error && err.name === 'ValidationError') {
-      return new Response(JSON.stringify({ error: err.message }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    log.error('POST /api/v1/sessions failed:', err);
-    return apiError(err);
-  }
+  return withAuth(req, async (_, { user }) => {
+    const parsed = SessionCreateSchema.safeParse(await req.json());
+    if (!parsed.success) return NextResponse.json({ error: 'Invalid session' }, { status: 400 });
+    await ensureHistoryUser(user.id);
+    const session = await prisma.dtSession.create({ data: { ...(parsed.data.id ? { id: parsed.data.id } : {}), userId: user.id, mode: 'chat', title: parsed.data.title ?? '新对话', capability: parsed.data.capability, metadata: parsed.data.metadata ? JSON.parse(JSON.stringify(parsed.data.metadata)) : undefined } });
+    return NextResponse.json({ success: true, data: dto(session) }, { status: 201 });
+  });
 }

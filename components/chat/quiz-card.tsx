@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { apiPost } from '@/lib/api-client';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { CheckCircle2, XCircle, HelpCircle } from 'lucide-react';
 
@@ -14,20 +16,32 @@ export interface QuizQuestion {
 interface QuizCardProps {
   quiz: QuizQuestion;
   className?: string;
+  onResult?: (result: { selectedIndex: number; correct: boolean; attemptId: string }) => Promise<void>;
 }
 
-export function QuizCard({ quiz, className }: QuizCardProps) {
+export function QuizCard({ quiz, className, onResult }: QuizCardProps) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const attemptId = useRef(crypto.randomUUID());
 
   const isCorrect = selectedIndex === quiz.correctIndex;
 
-  const handleSubmit = () => {
-    if (selectedIndex === null) return;
-    setSubmitted(true);
+  const handleSubmit = async () => {
+    if (selectedIndex === null || saving) return;
+    setSaving(true);
+    try {
+      if (quiz.correctIndex !== undefined) {
+        await apiPost('/api/v1/quiz-attempts', { attemptId: attemptId.current, title: quiz.question, answers: [{ questionId: attemptId.current, topic: '练习', question: quiz.question, userAnswer: quiz.options[selectedIndex], correctAnswer: quiz.options[quiz.correctIndex] ?? '', correct: isCorrect }] });
+        await onResult?.({ selectedIndex, correct: isCorrect, attemptId: attemptId.current });
+      }
+      setSubmitted(true);
+    } catch (error) { toast.error(error instanceof Error ? error.message : '保存答题记录失败'); }
+    finally { setSaving(false); }
   };
 
   const handleReset = () => {
+    attemptId.current = crypto.randomUUID();
     setSelectedIndex(null);
     setSubmitted(false);
   };
@@ -99,7 +113,7 @@ export function QuizCard({ quiz, className }: QuizCardProps) {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={selectedIndex === null}
+            disabled={saving || selectedIndex === null}
             className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             提交答案

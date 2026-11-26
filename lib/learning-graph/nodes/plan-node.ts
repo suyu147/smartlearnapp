@@ -68,10 +68,10 @@ export async function planNode(
       maxOutputTokens: 2048,
     }, 'learn-plan-node');
 
+    // 只消费流并解析结果，不把规划用的原始 JSON 推给前端 AI 输出面板
     let fullContent = '';
     for await (const chunk of result.textStream) {
       fullContent += chunk;
-      write({ type: 'text_delta', text: chunk });
     }
 
     const parsed = parseJsonResponse<{ title?: string; knowledgePoints?: string[]; estimatedMinutes?: number }>(fullContent);

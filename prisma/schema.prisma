@@ -37,6 +37,7 @@ model User {
   cowriterDocs    CowriterDocument[]
   agentActivities AgentActivity[]
   dtModelCatalogs DtModelCatalog[]
+  historyDocuments UserHistoryDocument[]
 }
 
 model LearningProfile {
@@ -145,12 +146,18 @@ model Resource {
   content     String
   metadata    Json?
   sourceAgent String
+  sessionId   String?
+  revision    Int            @default(1)
+  deletedAt   DateTime?
+  updatedAt   DateTime       @updatedAt
+  session     DtSession?     @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   status      ResourceStatus @default(generating)
   createdAt   DateTime       @default(now())
 
   user          User              @relation(fields: [userId], references: [id])
   pathNodes     PathNodeResource[]
 
+  @@index([userId, sessionId, deletedAt])
   @@index([userId, type])
   @@index([userId, status])
 }
@@ -173,6 +180,10 @@ enum ResourceStatus {
 
 model LearningPath {
   id        String     @id @default(cuid())
+  sessionId String?    @unique
+  revision  Int        @default(1)
+  deletedAt DateTime?
+  session   DtSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   userId    String
   goal      String
   nodes     Json
@@ -271,6 +282,12 @@ model DtSession {
   userId              String
   title               String   @default("New Chat")
   capability          String?
+  mode                String   @default("chat")
+  revision            Int      @default(0)
+  deletedAt           DateTime? @map("deleted_at")
+  learningState       Json?    @map("learning_state")
+  resources           Resource[]
+  learningPaths       LearningPath[]
   compressedSummary   String?  @map("compressed_summary")
   summaryUpToMsgId    Int?     @map("summary_up_to_msg_id")
   preferences         Json?
@@ -498,6 +515,10 @@ model UserSettings {
   smartlearnModelId     String?  @map("smartlearn_model_id")
   smartlearnBaseUrl     String?  @map("smartlearn_base_url")
   generatePptImages     Boolean  @default(false) @map("generate_ppt_images")
+  pptMaxPages           Int?     @map("ppt_max_pages")
+  enablePptInteractive  Boolean  @default(true) @map("enable_ppt_interactive")
+  enablePptQuiz         Boolean  @default(true) @map("enable_ppt_quiz")
+  revision              Int      @default(0)
   maxTurns              Int      @default(40) @map("max_turns")
   maxResourceConcurrency Int     @default(3) @map("max_resource_concurrency")
 
@@ -556,6 +577,9 @@ model MemoryEntry {
 /// Book compilation records
 model Book {
   id            String   @id @default(cuid())
+  revision      Int      @default(0)
+  mutationToken String?  @map("mutation_token")
+  mutationUntil DateTime? @map("mutation_until")
   userId        String   @map("user_id")
   title         String
   subtitle      String?
@@ -611,4 +635,17 @@ model AgentActivity {
 
   @@index([userId, sessionId])
   @@map("agent_activities")
+}
+
+// Account-owned history that does not belong to a learning session (profile versions/chat).
+model UserHistoryDocument {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  key       String
+  payload   Json
+  revision  Int      @default(1)
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, key])
+  @@map("user_history_documents")
 }

@@ -23,6 +23,8 @@ export type PathStatus = 'active' | 'completed' | 'archived';
 
 export interface LearningPath {
   id: string;
+  sessionId?: string | null;
+  revision?: number;
   userId: string;
   goal: string;
   nodes: LearningPathNode[];

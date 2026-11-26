@@ -3,6 +3,8 @@
  */
 
 import { NextRequest } from 'next/server';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import { readdir, readFile } from 'fs/promises';
 import { createLogger } from '@/lib/logger';
 import { getDataDir } from '@/lib/paths';
 import { writeFile, mkdir } from 'fs/promises';
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest) {
       id: `att_${timestamp}`,
       fileName: file.name,
       filePath,
+      url: `/api/v1/attachments?id=att_${timestamp}`,
       fileSize: buffer.length,
       mimeType: file.type || 'application/octet-stream',
       uploadedAt: new Date().toISOString(),
@@ -72,4 +75,19 @@ export async function POST(req: NextRequest) {
     log.error('POST /api/v1/attachments failed:', err);
     return apiError(err);
   }
+}
+
+export async function GET(req: NextRequest) {
+  return withAuth(req, async (_, { user }) => {
+    const id = req.nextUrl.searchParams.get('id');
+    if (!id || !/^att_[0-9]+$/.test(id)) return new Response('Invalid attachment id', { status: 400 });
+    const dir = getDataDir('attachments', user.id);
+    const files = await readdir(dir).catch(() => [] as string[]);
+    const fileName = files.find(name => name.startsWith(`${id.slice(4)}_`));
+    if (!fileName) return new Response('Attachment not found', { status: 404 });
+    const data = await readFile(join(dir, fileName));
+    const extension = fileName.split('.').pop()?.toLowerCase() ?? 'bin';
+    const types: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', pdf: 'application/pdf', txt: 'text/plain' };
+    return new Response(data, { headers: { 'Content-Type': types[extension] ?? 'application/octet-stream', 'Content-Disposition': `attachment; filename="${fileName.slice(fileName.indexOf('_') + 1)}"`, 'Cache-Control': 'private, max-age=3600' } });
+  });
 }

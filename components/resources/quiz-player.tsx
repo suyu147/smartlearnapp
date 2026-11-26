@@ -1,6 +1,9 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
+import { apiPost } from '@/lib/api-client';
+import { toast } from 'sonner';
+import { getApiToken } from '@/lib/auth-token';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,7 +11,6 @@ import { parseJsonResponse } from '@/lib/generation/json-repair';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useLearningProfileStore } from '@/lib/store/learning-profile';
 import { useLearningPathStore } from '@/lib/store/learning-path';
-import { useSessionsStore } from '@/lib/store/sessions';
 import type { Quiz } from '@/lib/types/resource';
 import type { ProfileDimensions } from '@/lib/types/profile';
 
@@ -50,13 +52,17 @@ export function QuizPlayer({
   content,
   title,
   onResult,
+  sessionId,
 }: {
   content: string;
   title: string;
+  sessionId?: string | null;
   onResult?: (result: { score: number; completed: boolean }) => void;
 }) {
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, string>>({});
   const [showResults, setShowResults] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const attemptId = useRef(crypto.randomUUID());
   const [evalStatus, setEvalStatus] = useState<EvalStatus>('idle');
   const [evaluationResult, setEvaluationResult] = useState<EvaluationResult | null>(null);
   const [evalScore, setEvalScore] = useState<number>(0);
@@ -64,7 +70,7 @@ export function QuizPlayer({
   const { providerId, modelId, apiKey, baseUrl } = useSettingsStore();
   const { profile, updateDimensions } = useLearningProfileStore();
   const { path } = useLearningPathStore();
-  const { currentSessionId } = useSessionsStore();
+  const targetSessionId = sessionId ?? null;
 
   const quizzes = useMemo<Quiz[]>(() => {
     try {
@@ -106,14 +112,14 @@ export function QuizPlayer({
     }));
 
     try {
-      const response = await fetch('/api/v1/smartlearn', {
+      const response = await fetch('/api/v1/smartlearn/evaluate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(getApiToken() ? { Authorization: `Bearer ${getApiToken()}` } : {}) },
         body: JSON.stringify({
-          action: 'quiz_result',
-          sessionId: currentSessionId,
+          attemptId: attemptId.current,
+          sessionId: targetSessionId ?? undefined,
           profile: profile?.dimensions ?? null,
-          goal: path?.goal ?? '',
+          goal: path?.goal || title,
           completedNodes: path?.nodes.filter((node) => node.status === 'completed') ?? [],
           currentNodeId: path?.nodes.find((node) => node.status === 'in_progress')?.id ?? null,
           quizResults,
@@ -176,7 +182,7 @@ export function QuizPlayer({
     } catch {
       setEvalStatus('idle');
     }
-  }, [results, quizzes, selectedAnswers, profile, path, currentSessionId, providerId, modelId, apiKey, baseUrl, updateDimensions]);
+  }, [results, quizzes, selectedAnswers, profile, path, targetSessionId, providerId, modelId, apiKey, baseUrl, updateDimensions]);
 
   if (quizzes.length === 0) {
     return (
@@ -407,19 +413,25 @@ export function QuizPlayer({
 
         <div className="flex gap-3">
           <Button
-            onClick={() => {
+            onClick={async () => {
+              setSubmitting(true);
+              try {
+                await apiPost('/api/v1/quiz-attempts', { attemptId: attemptId.current, title, sessionId: targetSessionId, answers: quizzes.map((quiz, index) => ({ questionId: quiz.id || String(index), topic: quiz.knowledgePoints?.[0] ?? title, question: quiz.question, userAnswer: selectedAnswers[index] ?? '', correctAnswer: Array.isArray(quiz.answer) ? quiz.answer.join(' / ') : quiz.answer, correct: checkAnswer(quiz, selectedAnswers[index]), difficulty: quiz.difficulty })) });
               const correctCount = quizzes.filter((quiz, index) => checkAnswer(quiz, selectedAnswers[index])).length;
               const score = quizzes.length > 0 ? Math.round((correctCount / quizzes.length) * 100) : 0;
               setShowResults(true);
               onResult?.({ score, completed: true });
+              } catch (error) { toast.error(error instanceof Error ? error.message : '保存答题记录失败'); }
+              finally { setSubmitting(false); }
             }}
-            disabled={Object.keys(selectedAnswers).length === 0}
+            disabled={submitting || showResults || Object.keys(selectedAnswers).length === 0}
           >
             提交答案
           </Button>
           <Button
             variant="outline"
             onClick={() => {
+              attemptId.current = crypto.randomUUID();
               setSelectedAnswers({});
               setShowResults(false);
               setEvalStatus('idle');

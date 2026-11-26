@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { I18nProvider } from '@/lib/hooks/use-i18n';
 import { useAuthStore } from '@/lib/store/auth-store';
 import { TopNav } from '@/components/layout/top-nav';
+import { HistorySync } from '@/components/history-sync';
 import '@/lib/i18n/config';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -14,7 +15,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     initAuth();
   }, [initAuth]);
 
-  return <I18nProvider>{children}</I18nProvider>;
+  return <I18nProvider><HistorySync>{children}</HistorySync></I18nProvider>;
 }
 
 // ---------------------------------------------------------------------------

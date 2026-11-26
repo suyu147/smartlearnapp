@@ -1,4 +1,6 @@
 import { NextRequest } from 'next/server';
+import { mutateBook } from '@/lib/history/book-mutation';
+import { HistoryConflict } from '@/lib/history/server';
 import { apiSuccess, apiError } from '@/lib/server/api-response';
 import { createBookEngineWithConfig } from '@/lib/deeptutor/bootstrap';
 import { BookDbService } from '@/lib/deeptutor/services/book-db-service';
@@ -29,13 +31,14 @@ export async function POST(request: NextRequest) {
 
       const config = resolveBookEngineConfigFromHeaders(req);
       const engine = createBookEngineWithConfig(config);
-      const result = await engine.confirmProposal(bookId);
+      const result = await mutateBook(req, user.id, bookId, () => engine.confirmProposal(bookId));
 
       return apiSuccess({
         book: result.book,
         chapterCount: result.spine.chapters.length,
       });
     } catch (err) {
+      if (err instanceof HistoryConflict) return apiError(err.message, 409);
       if (isValidationError(err) || isSyntaxError(err)) {
         return apiError(errorToMessage(err), 400);
       }

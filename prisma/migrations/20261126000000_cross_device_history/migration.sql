@@ -1,0 +1,12 @@
+ALTER TABLE "dt_sessions" ADD COLUMN "mode" TEXT NOT NULL DEFAULT 'chat', ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 0, ADD COLUMN "deleted_at" TIMESTAMP(3), ADD COLUMN "learning_state" JSONB;
+ALTER TABLE "Resource" ADD COLUMN "sessionId" TEXT, ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 1, ADD COLUMN "deletedAt" TIMESTAMP(3), ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE "LearningPath" ADD COLUMN "sessionId" TEXT, ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 1, ADD COLUMN "deletedAt" TIMESTAMP(3);
+CREATE INDEX "Resource_userId_sessionId_deletedAt_idx" ON "Resource"("userId", "sessionId", "deletedAt");
+CREATE UNIQUE INDEX "LearningPath_sessionId_key" ON "LearningPath"("sessionId");
+ALTER TABLE "Resource" ADD CONSTRAINT "Resource_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "dt_sessions"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "LearningPath" ADD CONSTRAINT "LearningPath_sessionId_fkey" FOREIGN KEY ("sessionId") REFERENCES "dt_sessions"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "user_settings" ADD COLUMN "ppt_max_pages" INTEGER, ADD COLUMN "enable_ppt_interactive" BOOLEAN NOT NULL DEFAULT true, ADD COLUMN "enable_ppt_quiz" BOOLEAN NOT NULL DEFAULT true, ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE "user_history_documents" ("id" TEXT NOT NULL, "user_id" TEXT NOT NULL, "key" TEXT NOT NULL, "payload" JSONB NOT NULL, "revision" INTEGER NOT NULL DEFAULT 1, "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, CONSTRAINT "user_history_documents_pkey" PRIMARY KEY ("id"));
+CREATE UNIQUE INDEX "user_history_documents_user_id_key_key" ON "user_history_documents"("user_id", "key");
+ALTER TABLE "user_history_documents" ADD CONSTRAINT "user_history_documents_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "books" ADD COLUMN "revision" INTEGER NOT NULL DEFAULT 0, ADD COLUMN "mutation_token" TEXT, ADD COLUMN "mutation_until" TIMESTAMP(3);

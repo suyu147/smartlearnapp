@@ -12,6 +12,20 @@ import { create } from 'zustand';
 import { setApiToken, getApiToken } from '@/lib/auth-token';
 import { clearAllUserData } from './clear-user-data';
 import { useSessionStore } from './session-store';
+import { useChatStore } from './chat-store';
+import { useBookStore } from './book-store';
+import { useCowriterStore } from './cowriter-store';
+import { useKnowledgeStore } from './knowledge-store';
+import { useMemoryStore } from './memory-store';
+import { useSettingsStoreV2 } from './settings-store';
+function resetAccountCaches() {
+  useSessionStore.getState().resetSessions(); useChatStore.getState().resetForNewUser();
+  useBookStore.setState({ books: [], synced: false });
+  useCowriterStore.setState({ documents: [], activeDocId: null, synced: false });
+  useKnowledgeStore.setState({ knowledgeBases: [], synced: false });
+  useMemoryStore.setState({ entries: [], synced: false });
+  useSettingsStoreV2.setState({ ...useSettingsStoreV2.getInitialState(), cacheOwner: null, revision: 0, hydrated: false });
+}
 
 /**
  * Decode JWT payload in the browser (no verification — middleware already
@@ -96,6 +110,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       data: { token: string; user: AuthUser };
     };
 
+    resetAccountCaches();
     setApiToken(data.token);
     set({ token: data.token, user: data.user });
     // Reset sessions so they are re-fetched for the new user
@@ -119,6 +134,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       data: { token: string; user: AuthUser };
     };
 
+    resetAccountCaches();
     setApiToken(data.token);
     set({ token: data.token, user: data.user });
     // Reset sessions so they are re-fetched for the new user
@@ -127,6 +143,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: () => {
+    resetAccountCaches();
     setApiToken(null);
     clearAllUserData();
     set({ token: null, user: null, hasProfile: false });

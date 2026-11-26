@@ -50,10 +50,9 @@ export async function apiFetch<T>(
   // Build headers: omit Content-Type for FormData to let the browser
   // auto-set multipart/form-data with the correct boundary string.
   const isFormData = restOptions.body instanceof FormData;
-  const headers: Record<string, string> = { ...authHeaders, ...optionHeaders };
-  if (!isFormData) {
-    headers['Content-Type'] = 'application/json';
-  }
+  const headers = new Headers(authHeaders);
+  new Headers(optionHeaders).forEach((value, key) => headers.set(key, value));
+  if (!isFormData && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
 
   const res = await fetch(path, {
     ...restOptions,
@@ -65,11 +64,7 @@ export async function apiFetch<T>(
     let code: string | undefined;
     try {
       const body = await res.json();
-      message =
-        body.error ??
-        body.error?.message ??
-        body.message ??
-        message;
+      message = typeof body.error === 'string' ? body.error : body.error?.message ?? body.message ?? message;
       code = body.code ?? body.error?.code;
     } catch {
       // response wasn't JSON
@@ -232,6 +227,7 @@ export async function submitTurn(
     modelId?: string;
     apiKey?: string;
     baseUrl?: string;
+    regenerateMessageId?: string;
     conversationHistory?: Record<string, unknown>[];
     attachments?: Array<{
       type: string;

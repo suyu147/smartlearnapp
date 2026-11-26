@@ -10,6 +10,7 @@ import { SmartLearnRequestSchema } from '@/lib/server/schemas';
 import { createSSEStream } from '@/lib/server/sse-stream';
 
 import { authenticate } from '@/lib/deeptutor/services/auth';
+import prisma from '@/lib/utils/database';
 import { getLearnerProfileService } from '@/lib/deeptutor/services/learner-profile';
 
 const log = createLogger('api:smartlearn');
@@ -27,6 +28,9 @@ export async function POST(req: NextRequest) {
     const storedProfile = await getLearnerProfileService().getProfile(userId);
 
     const sessionId = body.sessionId;
+    if (body.sessionId && !await prisma.dtSession.findFirst({ where: { id: body.sessionId, userId, deletedAt: null } })) {
+      return NextResponse.json({ error: 'Learning session not found' }, { status: 404 });
+    }
     const turnId = `turn_${Date.now()}`;
 
     log.info(`SmartLearn POST: sessionId=${sessionId}, action=${body.action}`);
@@ -47,6 +51,9 @@ export async function POST(req: NextRequest) {
       resourceFeedback: body.resourceFeedback ?? [],
       nodeDecisionOverrides: body.nodeDecisionOverrides ?? {},
       generatePptImages: body.generatePptImages ?? false,
+      pptMaxPages: body.pptMaxPages,
+      enablePptInteractive: body.enablePptInteractive ?? true,
+      enablePptQuiz: body.enablePptQuiz ?? true,
       currentNode: null,
       learnerSnapshot: null,
       resourcePlan: null,

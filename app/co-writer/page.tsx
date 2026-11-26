@@ -15,12 +15,13 @@ import {
   PenLine,
   Loader2,
   Clock,
-  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api-client'
+import { apiGet, apiPost, apiPut, apiDelete, ApiRequestError } from '@/lib/api-client'
 import { useCowriterStore, type CowriterDoc } from '@/lib/store/cowriter-store'
 import { useI18n } from '@/lib/hooks/use-i18n'
+import { useRefreshOnFocus } from '@/lib/hooks/use-refresh-on-focus'
+import { useAuthStore } from '@/lib/store/auth-store'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,6 +38,7 @@ interface DocSummary {
 interface EditResult {
   editedText: string
   operationId: string
+  version: number
 }
 
 type EditAction = 'rewrite' | 'shorten' | 'expand' | 'summarize'
@@ -87,11 +89,27 @@ export default function CoWriterPage() {
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const activeDocRef = useRef(activeDoc)
+  activeDocRef.current = activeDoc
+  const pendingContent = useRef(new Map<string, string>())
+  const acknowledgedVersions = useRef(new Map<string, number>())
+  const saveWork = useRef<Promise<boolean> | null>(null)
+  const flushRef = useRef<() => Promise<boolean>>(async () => true)
+  const owner = useRef(useAuthStore.getState().user?.id)
 
-  // Cleanup auto-save timer on unmount
+  // Flush committed edits on navigation; warn before closing with unfinished writes.
   useEffect(() => {
+    const flush = () => { void flushRef.current() }
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (pendingContent.current.size || saveWork.current) { event.preventDefault(); event.returnValue = '' }
+    }
+    document.addEventListener('visibilitychange', flush)
+    window.addEventListener('beforeunload', beforeUnload)
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      document.removeEventListener('visibilitychange', flush)
+      window.removeEventListener('beforeunload', beforeUnload)
+      void flushRef.current()
     }
   }, [])
 
@@ -101,16 +119,17 @@ export default function CoWriterPage() {
   const fetchDocs = useCallback(async () => {
     try {
       const list = await apiGet<DocSummary[]>('/api/v1/co-writer')
+      if (useAuthStore.getState().user?.id !== owner.current) return
       setDocs(list)
       setError(null)
-    } catch (err: any) {
+    } catch (err) {
       // API might be down or auth required
-      setError(err?.message ?? t('cowriter.apiError'))
+      setError(err instanceof Error ? err.message : t('cowriter.apiError'))
       setDocs([])
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     fetchDocs()
@@ -120,13 +139,15 @@ export default function CoWriterPage() {
   // Load a document
   // ---------------------------------------------------------------------------
   const loadDoc = useCallback(async (id: string) => {
+    if ((pendingContent.current.size || saveWork.current) && !await flushRef.current()) return
     try {
-      const doc = await apiGet<{ id: string; title: string; content: string; createdAt: string; updatedAt: string }>(`/api/v1/co-writer/${id}`)
+      const doc = await apiGet<{ id: string; title: string; content: string; version: number; createdAt: string; updatedAt: string }>(`/api/v1/co-writer/${id}`)
+      if (useAuthStore.getState().user?.id !== owner.current) return
       const mapped: CowriterDoc = {
         id: doc.id,
         title: doc.title,
         content: doc.content,
-        version: 1,
+        version: doc.version,
         lastEdited: doc.updatedAt,
         status: 'saved',
       }
@@ -136,22 +157,37 @@ export default function CoWriterPage() {
         store.addDoc(mapped)
       }
       store.setActiveDoc(id)
+      acknowledgedVersions.current.set(id, mapped.version)
       setActiveDoc(mapped)
+      activeDocRef.current = mapped
       setDirty(false)
       setError(null)
-    } catch {
+    } catch (error) {
+      if (useAuthStore.getState().user?.id !== owner.current) return
+      if (error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) {
+        setActiveDoc(null)
+        store.setActiveDoc('')
+      }
+      setError(error instanceof Error ? error.message : '加载文档失败')
     }
   }, [store])
+
+  useRefreshOnFocus(async () => {
+    await fetchDocs()
+    if (activeDoc) await loadDoc(activeDoc.id)
+  }, !dirty && !saving && !editing)
 
   // ---------------------------------------------------------------------------
   // Create new document
   // ---------------------------------------------------------------------------
   const createDoc = useCallback(async () => {
+    if ((pendingContent.current.size || saveWork.current) && !await flushRef.current()) return
     try {
       const doc = await apiPost<{ id: string; title: string; content: string; createdAt: string; updatedAt: string }>(
         '/api/v1/co-writer',
         { title: t('cowriter.unnamedDocument'), content: `# ${t('cowriter.unnamedDocument')}\n\n${t('cowriter.startWriting')}` },
       )
+      if (useAuthStore.getState().user?.id !== owner.current) return
       store.addDoc({
         id: doc.id,
         title: doc.title,
@@ -162,20 +198,23 @@ export default function CoWriterPage() {
       })
       await fetchDocs()
       await loadDoc(doc.id)
-    } catch (err: any) {
-      setError(err?.message ?? t('cowriter.apiError'))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('cowriter.apiError'))
     }
-  }, [store, fetchDocs, loadDoc])
+  }, [store, fetchDocs, loadDoc, t])
 
   // ---------------------------------------------------------------------------
   // Delete document
   // ---------------------------------------------------------------------------
   const deleteDoc = useCallback(
-    async (id: string, e: React.MouseEvent) => {
+    async (id: string, e: React.MouseEvent | React.KeyboardEvent) => {
       e.stopPropagation()
       if (!confirm(t('cowriter.confirmDelete'))) return
       try {
         await apiDelete(`/api/v1/co-writer/${id}`)
+        if (useAuthStore.getState().user?.id !== owner.current) return
+        pendingContent.current.delete(id)
+        acknowledgedVersions.current.delete(id)
         store.removeDoc(id)
         if (activeDoc?.id === id) {
           setActiveDoc(null)
@@ -185,34 +224,51 @@ export default function CoWriterPage() {
       } catch {
       }
     },
-    [store, activeDoc, fetchDocs],
+    [store, activeDoc, fetchDocs, t],
   )
 
   // ---------------------------------------------------------------------------
   // Auto-save (debounced)
   // ---------------------------------------------------------------------------
-  const autoSave = useCallback(
-    (content: string) => {
-      if (!activeDoc) return
-      setDirty(true)
-
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = setTimeout(async () => {
-        setSaving(true)
-        try {
-          await apiPut(`/api/v1/co-writer/${activeDoc.id}`, { content })
-          store.updateDocContent(activeDoc.id, content)
-          setDirty(false)
-          // Refresh doc list to get updated timestamps
-          fetchDocs()
-        } catch {
-        } finally {
-          setSaving(false)
+  const flushDocument = useCallback((): Promise<boolean> => {
+    if (saveWork.current) return saveWork.current
+    if (!pendingContent.current.size) return Promise.resolve(true)
+    if (useAuthStore.getState().user?.id !== owner.current) return Promise.resolve(false)
+    setSaving(true)
+    const work = (async () => {
+      try {
+        while (pendingContent.current.size) {
+          if (useAuthStore.getState().user?.id !== owner.current) return false
+          const [id, content] = pendingContent.current.entries().next().value!
+          const expectedVersion = acknowledgedVersions.current.get(id) ?? activeDocRef.current?.version
+          const saved = await apiPut<{ version: number; updatedAt: string }>(`/api/v1/co-writer/${id}`, { content, expectedVersion })
+          if (useAuthStore.getState().user?.id !== owner.current) return false
+          acknowledgedVersions.current.set(id, saved.version)
+          if (pendingContent.current.get(id) === content) pendingContent.current.delete(id)
+          setActiveDoc(previous => previous?.id === id ? { ...previous, version: saved.version, lastEdited: saved.updatedAt } : previous)
+          store.updateDocContent(id, content)
         }
-      }, 1500)
-    },
-    [activeDoc, store],
-  )
+        setDirty(false)
+        setError(null)
+        void fetchDocs()
+        return true
+      } catch (error) {
+        setError(error instanceof Error ? error.message : '保存文档失败')
+        return false
+      } finally { setSaving(false) }
+    })()
+    saveWork.current = work.finally(() => { saveWork.current = null })
+    return saveWork.current
+  }, [store, fetchDocs])
+  flushRef.current = flushDocument
+  const autoSave = useCallback((content: string) => {
+    const current = activeDocRef.current
+    if (!current) return
+    pendingContent.current.set(current.id, content)
+    setDirty(true)
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => { void flushDocument() }, 700)
+  }, [flushDocument])
 
   const handleContentChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -242,26 +298,30 @@ export default function CoWriterPage() {
       store.updateDocContent(activeDoc.id, activeDoc.content) // mark as ai-generating
 
       try {
+        if (!await flushDocument()) return
         const result = await apiPost<EditResult>(
           `/api/v1/co-writer/${activeDoc.id}/edit`,
           {
             text: activeDoc.content,
+            expectedVersion: acknowledgedVersions.current.get(activeDoc.id) ?? activeDoc.version,
             instruction: editInstruction || '',
             action,
             language: 'zh',
           },
         )
 
+        if (useAuthStore.getState().user?.id !== owner.current) return
         if (result.editedText && !result.editedText.startsWith('[')) {
           setActiveDoc((prev) =>
-            prev ? { ...prev, content: result.editedText } : null,
+            prev ? { ...prev, content: result.editedText, version: result.version } : null,
           )
+          acknowledgedVersions.current.set(activeDoc.id, result.version)
           store.updateDocContent(activeDoc.id, result.editedText)
         } else if (result.editedText?.startsWith('[')) {
           setError(result.editedText)
         }
-      } catch (err: any) {
-        setError(err?.message ?? t('cowriter.apiError'))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t('cowriter.apiError'))
       } finally {
         setEditing(false)
         setEditAction(null)
@@ -269,7 +329,7 @@ export default function CoWriterPage() {
         setEditInstruction('')
       }
     },
-    [activeDoc, editing, editInstruction, showInstruction, store],
+    [activeDoc, editing, editInstruction, showInstruction, store, flushDocument, t],
   )
 
   // ---------------------------------------------------------------------------
@@ -289,6 +349,7 @@ export default function CoWriterPage() {
           <h2 className="text-[13px] font-semibold text-[var(--foreground)]">{t('cowriter.documentList')}</h2>
           <button
             onClick={createDoc}
+            disabled={editing}
             className="p-1.5 rounded-lg hover:bg-[var(--muted)] transition-colors"
             title={t('cowriter.newDocument')}
           >
@@ -307,6 +368,7 @@ export default function CoWriterPage() {
               <p className="text-[12px] text-[var(--muted-foreground)]">{t('cowriter.noDocuments')}</p>
               <button
                 onClick={createDoc}
+            disabled={editing}
                 className="mt-2 text-[12px] text-[var(--primary)] hover:underline"
               >
                 {t('cowriter.createFirstDoc')}
@@ -316,6 +378,7 @@ export default function CoWriterPage() {
             docs.map((doc) => (
               <button
                 key={doc.id}
+                disabled={editing}
                 onClick={() => loadDoc(doc.id)}
                 className={cn(
                   'w-full text-left px-3 py-2.5 rounded-lg transition-colors group flex items-start gap-2.5',
@@ -341,7 +404,7 @@ export default function CoWriterPage() {
                   role="button"
                   tabIndex={0}
                   onClick={(e) => deleteDoc(doc.id, e)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') deleteDoc(doc.id, e as any) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') deleteDoc(doc.id, e) }}
                   className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[var(--destructive)]/10 transition-all cursor-pointer"
                 >
                   <Trash2 className="h-3 w-3 text-[var(--destructive)]" />
@@ -548,6 +611,7 @@ export default function CoWriterPage() {
                     <textarea
                       value={activeDoc.content}
                       onChange={handleContentChange}
+                      readOnly={editing}
                       className="w-full h-full bg-transparent p-6 font-mono text-[13px] text-[var(--foreground)] leading-relaxed resize-none outline-none"
                       placeholder={t('cowriter.startWriting')}
                       spellCheck={false}
@@ -619,6 +683,7 @@ export default function CoWriterPage() {
               </p>
               <button
                 onClick={createDoc}
+            disabled={editing}
                 className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity inline-flex items-center gap-2"
               >
                 <Plus className="h-4 w-4" />

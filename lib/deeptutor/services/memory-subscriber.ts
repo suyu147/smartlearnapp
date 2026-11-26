@@ -74,32 +74,14 @@ export function registerMemorySubscriber(memoryService: MemoryServiceImpl): void
       if (!runId) return; // Race condition — another run started
 
       try {
-        // Step 1: Snapshot refresh → auto-detect changes → emit L1 traces
+        // Step 1: Snapshot refresh → detect changes (used only to gate consolidation).
+        // Snapshot diffs carry fingerprints/labels, not memory content, so they are
+        // not written into the L1 trace anymore.
         const changes = await refreshSnapshot(
           payload.userId,
           surface,
           snapshotStore,
         );
-
-        // Emit L1 trace for each snapshot change
-        for (const change of changes) {
-          try {
-            await memoryService.emitTrace(payload.userId, {
-              surface,
-              kind: `snapshot_${change.kind}`,
-              payload: {
-                entityId: change.entityId,
-                label: change.label,
-                prevFingerprint: change.prevFingerprint,
-                newFingerprint: change.newFingerprint,
-              },
-              sessionId: change.entityId,
-              turnId: payload.turnId,
-            });
-          } catch (err) {
-            log.warn('emitTrace failed for snapshot change:', err);
-          }
-        }
 
         // Step 2: Consolidation (L1→L2→L3)
         // Only run consolidate if there are new changes

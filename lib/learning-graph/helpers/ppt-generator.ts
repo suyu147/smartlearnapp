@@ -130,11 +130,21 @@ function injectCodeButtons(scenes: Scene[], buttons: CodeButton[]) {
   content.codeButtons = buttons;
 }
 
+export interface PptGenerationOptions {
+  /** Whether to generate AI images for slides. */
+  generateImages?: boolean;
+  /** Whether interactive HTML scenes are allowed. Defaults to true. */
+  includeInteractive?: boolean;
+  /** Whether quiz scenes are allowed. Defaults to true. */
+  includeQuiz?: boolean;
+  /** Maximum number of pages. Undefined or <= 0 uses the default outline rules. */
+  maxPages?: number;
+}
+
 export async function generatePptScenes(
   requirement: string,
   aiConfig?: { providerId?: string; modelId?: string; apiKey?: string; baseUrl?: string },
-  enableImageGeneration?: boolean,
-  includeInteractive?: boolean,
+  options: PptGenerationOptions = {},
   knowledgePoints?: string[],
   onProgress?: (message: string) => void,
   onSceneReady?: (scene: Scene, completed: number, total: number) => void,
@@ -144,6 +154,13 @@ export async function generatePptScenes(
   const modelId = aiConfig?.modelId;
   const apiKey = aiConfig?.apiKey;
   const baseUrl = aiConfig?.baseUrl;
+  const enableImageGeneration = options.generateImages === true;
+  const includeInteractive = options.includeInteractive !== false;
+  const includeQuiz = options.includeQuiz !== false;
+  const maxPages =
+    options.maxPages && options.maxPages > 0
+      ? Math.min(30, Math.floor(options.maxPages))
+      : undefined;
 
   // 按任务类型分配输出上限。每页内容 + 动作合并为一次调用：约 4096 + 2048。
   const aiCallOutline = createAICallFn(providerId, modelId, apiKey, baseUrl, 8192);
@@ -158,13 +175,45 @@ export async function generatePptScenes(
   const requirements: UserRequirements = { requirement, language: 'zh-CN' };
 
   report('正在生成PPT大纲...');
-  const outlineResult = await generateSceneOutlinesFromRequirements(requirements, undefined, undefined, aiCallOutline, undefined, { imageGenerationEnabled: imageGenAvailable, videoGenerationEnabled: false, includeInteractive: includeInteractive !== false });
+  const outlineResult = await generateSceneOutlinesFromRequirements(requirements, undefined, undefined, aiCallOutline, undefined, {
+    imageGenerationEnabled: imageGenAvailable,
+    videoGenerationEnabled: false,
+    includeInteractive,
+    includeQuiz,
+    maxScenes: maxPages,
+  });
   if (!outlineResult.success || !outlineResult.data) return [];
+
+  // 先过滤被禁用的场景类型，再执行页数硬上限，避免为不会保留的页面生成内容
+  let outlines = outlineResult.data;
+  if (!includeInteractive) {
+    outlines = outlines.filter((outline) => outline.type !== 'interactive');
+  }
+  if (!includeQuiz) {
+    outlines = outlines.filter((outline) => outline.type !== 'quiz');
+  }
+  if (maxPages) {
+    outlines = outlines.slice(0, maxPages);
+  }
+
+  // 两个场景类型都关闭时，至少保留一个 slide，避免整份 PPT 为空
+  if (outlines.length === 0 && outlineResult.data.length > 0) {
+    const source = outlineResult.data[0];
+    outlines = [{
+      ...source,
+      type: 'slide',
+      order: 1,
+      quizConfig: undefined,
+      interactiveConfig: undefined,
+      pblConfig: undefined,
+    }];
+  }
+  if (outlines.length === 0) return [];
 
   let generatedMediaMapping: ImageMapping = {};
   if (imageGenAvailable) {
     try {
-      const allMediaGens = outlineResult.data.filter((o) => o.mediaGenerations?.length).flatMap((o) => o.mediaGenerations!);
+      const allMediaGens = outlines.filter((o) => o.mediaGenerations?.length).flatMap((o) => o.mediaGenerations!);
       if (allMediaGens.length > 0) {
         report(`正在生成配图 (${allMediaGens.length}张)...`);
         generatedMediaMapping = Object.fromEntries(await batchGenerateImages(allMediaGens));
@@ -178,13 +227,13 @@ export async function generatePptScenes(
 
   const stageId = `stage_${Date.now()}`;
   const scenes: Scene[] = [];
-  const totalOutlines = outlineResult.data.length;
+  const totalOutlines = outlines.length;
   const concurrency = 3;
   let completedScenes = 0;
 
   // 页面并行生成：每批最多 3 页，单页内容和动作一次调用完成
   for (let start = 0; start < totalOutlines; start += concurrency) {
-    const batch = outlineResult.data.slice(start, start + concurrency);
+    const batch = outlines.slice(start, start + concurrency);
     await Promise.allSettled(
       batch.map(async (outline) => {
         try {

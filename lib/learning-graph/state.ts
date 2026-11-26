@@ -9,6 +9,7 @@ import type { EvaluationResultPayload, LearnRequest, LearnerSnapshot, QuizResult
 export const LearningState = Annotation.Root({
   action: Annotation<LearnRequest['action']>(),
   sessionId: Annotation<string>(),
+  attemptId: Annotation<string | undefined>(),
   profile: Annotation<ProfileDimensions>(),
   goal: Annotation<string>(),
   completedNodes: Annotation<LearningPathNode[]>(),
@@ -22,6 +23,9 @@ export const LearningState = Annotation.Root({
   resourceFeedback: Annotation<PriorNodeFeedback[]>(),
   nodeDecisionOverrides: Annotation<Record<string, ResourceType[]>>(),
   generatePptImages: Annotation<boolean>(),
+  pptMaxPages: Annotation<number | undefined>(),
+  enablePptInteractive: Annotation<boolean>(),
+  enablePptQuiz: Annotation<boolean>(),
   currentNode: Annotation<LearningPathNode | null>(),
   learnerSnapshot: Annotation<LearnerSnapshot | null>(),
   resourcePlan: Annotation<ResourceDecisionResultV2 | null>(),

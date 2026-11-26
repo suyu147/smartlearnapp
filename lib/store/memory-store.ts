@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { toast } from 'sonner';
 import { getApiToken } from '@/lib/auth-token';
 
 export interface MemoryEntry {
@@ -24,7 +25,7 @@ interface MemoryState {
   synced: boolean;
   setActiveLayer: (l: 'L1' | 'L2' | 'L3') => void;
   addEntry: (e: MemoryEntry) => void;
-  removeEntry: (id: string) => void;
+  removeEntry: (id: string) => Promise<void>;
   consolidate: (surface?: string) => Promise<ConsolidateResult>;
   syncFromServer: () => Promise<void>;
   writeEntry: (entry: MemoryEntry) => Promise<void>;
@@ -37,6 +38,9 @@ function makeId(layer: string): string {
 
 /** All memory surfaces supported by the server memory API. */
 const MEMORY_SURFACES = ['chat', 'notebook', 'quiz', 'kb', 'book', 'cowriter'] as const;
+
+/** L3 synthesis slots supported by the server memory API. */
+const L3_SLOTS = ['recent', 'profile', 'scope', 'preferences'];
 
 /** Shape of a trace event returned by GET /api/v1/memory?layer=trace */
 interface TraceEventShape {
@@ -89,10 +93,42 @@ export const useMemoryStore = create<MemoryState>()(
           entries: [...state.entries, e],
         })),
 
-      removeEntry: (id) =>
-        set((state) => ({
-          entries: state.entries.filter((e) => e.id !== id),
-        })),
+      // ------------------------------------------------------------------
+      // removeEntry — DELETE the entry on the server, then re-sync so the
+      // UI reflects the persisted state instead of a frontend-only filter.
+      // ------------------------------------------------------------------
+      removeEntry: async (id) => {
+        const entry = get().entries.find((e) => e.id === id);
+        if (!entry) return;
+
+        const params = new URLSearchParams({ layer: entry.layer });
+        if (entry.layer === 'L1') {
+          params.set('surface', entry.source ?? 'chat');
+          params.set('entryId', entry.id);
+        } else if (entry.layer === 'L2') {
+          params.set('surface', entry.source ?? 'chat');
+        } else if (entry.source && L3_SLOTS.includes(entry.source)) {
+          params.set('slot', entry.source);
+        } else {
+          toast.error('该记忆条目暂不支持删除');
+          return;
+        }
+
+        try {
+          const res = await fetch(`/api/v1/memory?${params.toString()}`, {
+            method: 'DELETE',
+            headers: buildAuthHeaders(),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+            throw new Error(body.error ?? `HTTP ${res.status}`);
+          }
+          await get().syncFromServer();
+        } catch (err) {
+          console.error('[MemoryStore] removeEntry error:', err);
+          toast.error(err instanceof Error ? err.message : '删除记忆失败');
+        }
+      },
 
       // ------------------------------------------------------------------
       // Consolidate — POST /api/v1/memory/consolidate

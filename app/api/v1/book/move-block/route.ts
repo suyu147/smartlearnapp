@@ -1,4 +1,6 @@
 import { NextRequest } from 'next/server';
+import { mutateBook } from '@/lib/history/book-mutation';
+import { HistoryConflict } from '@/lib/history/server';
 import { apiSuccess, apiError } from '@/lib/server/api-response';
 import { getBookEngine } from '@/lib/deeptutor/bootstrap';
 import { BookDbService } from '@/lib/deeptutor/services/book-db-service';
@@ -27,7 +29,7 @@ export async function POST(request: NextRequest) {
       }
 
       const engine = getBookEngine();
-      const page = await engine.moveBlock(bookId, pageId, fromIndex, toIndex);
+      const page = await mutateBook(req, user.id, bookId, () => engine.moveBlock(bookId, pageId, fromIndex, toIndex));
 
       if (!page) {
         return apiError('Page or block not found', 404, 'NOT_FOUND');
@@ -35,6 +37,7 @@ export async function POST(request: NextRequest) {
 
       return apiSuccess(page);
     } catch (err) {
+      if (err instanceof HistoryConflict) return apiError(err.message, 409);
       if (isValidationError(err) || isSyntaxError(err)) {
         return apiError(errorToMessage(err), 400);
       }

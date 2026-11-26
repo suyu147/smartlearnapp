@@ -63,6 +63,64 @@ export async function GET(req: NextRequest) {
   }
 }
 
+const ALLOWED_SURFACES: Surface[] = ['chat', 'notebook', 'quiz', 'kb', 'book', 'cowriter', 'onboarding'];
+const ALLOWED_L3_SLOTS: L3Slot[] = ['recent', 'profile', 'scope', 'preferences'];
+
+function badRequest(message: string) {
+  return new Response(JSON.stringify({ error: message }), {
+    status: 400,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/**
+ * DELETE /api/v1/memory — Remove a single memory entry
+ *   ?layer=L1&surface=chat&entryId=<trace id>
+ *   ?layer=L2&surface=chat
+ *   ?layer=L3&slot=recent
+ */
+export async function DELETE(req: NextRequest) {
+  try {
+    const userId = getUserId(req);
+    const url = new URL(req.url);
+    const layer = url.searchParams.get('layer');
+    const svc = getMemoryService();
+
+    if (layer === 'L1' || layer === 'L2') {
+      const surface = (url.searchParams.get('surface') ?? 'chat') as Surface;
+      if (!ALLOWED_SURFACES.includes(surface)) return badRequest(`Unsupported surface: ${surface}`);
+
+      if (layer === 'L1') {
+        const entryId = url.searchParams.get('entryId');
+        if (!entryId) return badRequest('entryId is required for L1');
+        const deleted = await svc.deleteTrace(userId, surface, entryId);
+        return new Response(JSON.stringify({ success: true, data: { deleted } }), {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      const deleted = await svc.deleteL2(userId, surface);
+      return new Response(JSON.stringify({ success: true, data: { deleted } }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (layer === 'L3') {
+      const slot = (url.searchParams.get('slot') ?? '') as L3Slot;
+      if (!ALLOWED_L3_SLOTS.includes(slot)) return badRequest(`Unsupported L3 slot: ${slot}`);
+      const deleted = await svc.deleteL3(userId, slot);
+      return new Response(JSON.stringify({ success: true, data: { deleted } }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return badRequest('layer must be L1, L2 or L3');
+  } catch (err) {
+    log.error('DELETE /api/v1/memory failed:', err);
+    return apiError(err);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const userId = getUserId(req);
