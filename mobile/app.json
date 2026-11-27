@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "智学方舟",
+    "slug": "smartlearn-mobile",
+    "version": "0.1.0",
+    "scheme": "smartlearn",
+    "platforms": [
+      "android"
+    ],
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ],
+    "android": {
+      "package": "com.smartlearn.mobile"
+    }
+  }
+}

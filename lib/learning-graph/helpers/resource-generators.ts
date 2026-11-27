@@ -12,6 +12,7 @@ import type {
 } from '@/lib/types/resource';
 import type { ProfileDimensions } from '@/lib/types/profile';
 import resourcePrompts from '@/lib/prompts/resource-prompts.json';
+import { parseMobileQuestions } from '@/lib/mobile/questions';
 
 const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
   document: 'document',
@@ -108,8 +109,14 @@ async function generateReadingResource(knowledgePoints: string[], profile?: Prof
   return { content: JSON.stringify(structuredReading), title: `${knowledgePoints.join(', ')} - reading`, metadata: { knowledgePoints, profileUsed: !!profile, structuredReading } };
 }
 
-export async function generateResource(type: ResourceType, knowledgePoints: string[], profile?: ProfileDimensions | null, aiConfig?: AIConfig) {
+export async function generateResource(type: ResourceType, knowledgePoints: string[], profile?: ProfileDimensions | null, aiConfig?: AIConfig, objectiveQuiz = false) {
   if (type === 'document') return generateDocumentResource(knowledgePoints, profile, aiConfig);
   if (type === 'reading') return generateReadingResource(knowledgePoints, profile, aiConfig);
+  if (type === 'quiz' && objectiveQuiz) {
+    const prompt = '用简体中文生成五道可自动评分的随堂题。仅输出 JSON 数组。每道题有 id、type（choice 或 fill）、difficulty（整数 1-5）、knowledgePoints、question、answer（正确选项的原文或可接受答案数组）、explanation、autoGradable（true）。选择题使用字符串数组 options，且只能选择一个选项。';
+    const content = await runTextGeneration(prompt, buildPersonalizedContext(knowledgePoints, profile), aiConfig, 'resource-mobile-quiz', 8192);
+    if (!parseMobileQuestions(content).length) throw new Error('未生成有效的随堂题');
+    return { content, title: `${knowledgePoints.join('、')} · 随堂练习`, metadata: { knowledgePoints } };
+  }
   return generateDefaultResource(type, knowledgePoints, profile, aiConfig);
 }

@@ -4,6 +4,7 @@ import { RESOURCE_TYPE_LABELS, type Resource, type ResourceType } from '@/lib/ty
 import { generateResource } from '../helpers/resource-generators';
 import type { LearningStateType } from '../state';
 import type { LearnEvent } from '../types';
+import { MOBILE_PATH_RESOURCES } from '@/lib/mobile/questions';
 
 export interface PathGenerationPersistence {
   path: LearningPath | null;
@@ -16,7 +17,7 @@ export interface PathGenerationPersistence {
 
 async function generateContent(type: ResourceType, state: LearningStateType, signal: AbortSignal) {
   const node = state.currentNode!;
-  if (type !== 'ppt') return generateResource(type, node.knowledgePoints, state.profile, state.aiConfig);
+  if (type !== 'ppt') return generateResource(type, node.knowledgePoints, state.profile, state.aiConfig, state.mobilePath);
 
   const options: StandardPptGenerationOptions = {
     topic: node.title.slice(0, 200), slideCount: 8, language: 'zh-CN',
@@ -49,8 +50,9 @@ export async function generateResourcesNode(
 
   const regenerating = state.action === 'generate_resources';
   const override = state.nodeDecisionOverrides?.[node.id];
-  const recommended = plan.items.filter(item => item.action === 'generate' ||
+  const selected = plan.items.filter(item => item.action === 'generate' ||
     (override?.includes(item.type) && node.resources.some(resource => resource.type === item.type))).map(item => item.type);
+  const recommended = state.mobilePath ? [...new Set([...MOBILE_PATH_RESOURCES, ...selected])] : selected;
   let types = recommended;
   if (regenerating && state.retryResourceType) types = [state.retryResourceType];
   else if (regenerating && !override) types = node.recommendedTypes ?? recommended;

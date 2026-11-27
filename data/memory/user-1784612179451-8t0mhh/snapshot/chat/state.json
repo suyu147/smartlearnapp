@@ -1,9 +1,11 @@
 {
   "fingerprints": {
-    "session-1785408311737": "82657aaf3524ef768b8315ccf128ee675e524a1b"
+    "session-1785408311737": "1ac39241d3b322c8857c48a13ed3efd639d80d9b",
+    "cmwytxas7000lu38kglb98h2s": "cd3aee4ae6993119cf1afad32b304f4e06bb6c1e"
   },
   "labels": {
-    "session-1785408311737": "New Chat"
+    "session-1785408311737": "New Chat",
+    "cmwytxas7000lu38kglb98h2s": "你好"
   },
-  "lastRefresh": "2026-07-30T10:50:02.150Z"
+  "lastRefresh": "2026-11-27T10:19:21.306Z"
 }

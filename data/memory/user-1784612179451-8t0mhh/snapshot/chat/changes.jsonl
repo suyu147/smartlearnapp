@@ -15,3 +15,5 @@
 {"ts":"2026-07-30T10:48:28.058Z","kind":"modified","entityId":"session-1785408311737","label":"New Chat","prevFingerprint":"078d6a946c42516aae7520c7a319579c1cd32406","newFingerprint":"c6b460776aacf624e8f559d48fbfebcf10270605"}
 {"ts":"2026-07-30T10:49:23.393Z","kind":"modified","entityId":"session-1785408311737","label":"New Chat","prevFingerprint":"c6b460776aacf624e8f559d48fbfebcf10270605","newFingerprint":"7154983172f9b9ec742dd05666a41abdb96b76b9"}
 {"ts":"2026-07-30T10:50:02.150Z","kind":"modified","entityId":"session-1785408311737","label":"New Chat","prevFingerprint":"7154983172f9b9ec742dd05666a41abdb96b76b9","newFingerprint":"82657aaf3524ef768b8315ccf128ee675e524a1b"}
+{"ts":"2026-11-27T10:19:21.306Z","kind":"added","entityId":"cmwytxas7000lu38kglb98h2s","label":"你好","prevFingerprint":null,"newFingerprint":"cd3aee4ae6993119cf1afad32b304f4e06bb6c1e"}
+{"ts":"2026-11-27T10:19:21.306Z","kind":"modified","entityId":"session-1785408311737","label":"New Chat","prevFingerprint":"82657aaf3524ef768b8315ccf128ee675e524a1b","newFingerprint":"1ac39241d3b322c8857c48a13ed3efd639d80d9b"}

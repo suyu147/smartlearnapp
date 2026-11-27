@@ -8,6 +8,11 @@ import { GET as listCourseware, POST as generateCourseware, DELETE as deleteCour
 import { GET as getCourseware } from '@/app/api/v1/smartlearn/courseware/[id]/route';
 import { GET as listResources, DELETE as deleteResources } from '@/app/api/v1/resources/sync/route';
 import { GET as downloadPpt } from '@/app/api/v1/smartlearn/ppt/route';
+import { GET as listMobilePaths } from '@/app/api/v1/mobile/learning-paths/route';
+import { GET as listMobileResources } from '@/app/api/v1/mobile/resources/route';
+import { GET as getPractice } from '@/app/api/v1/mobile/practice/[resourceId]/route';
+import { POST as submitPractice } from '@/app/api/v1/mobile/practice/[resourceId]/attempts/route';
+import { GET as getReport } from '@/app/api/v1/mobile/practice/attempts/[attemptId]/route';
 import { DEFAULT_DIMENSIONS } from '@/lib/types/profile';
 import type { StreamEvent } from '@/lib/deeptutor/core/types';
 
@@ -138,5 +143,64 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
     expect(updated.nodes.map((node: { status: string }) => node.status)).toEqual(['completed', 'in_progress']);
     expect(updated.nodes[1].resources.map((item: { type: string }) => item.type).sort()).toEqual(['code', 'mindmap', 'reading', 'video']);
     expect(updated.edges).toEqual([{ from: 'fixture-node', to: 'fixture-next' }]);
+  });
+
+  it('shares mobile node resources and records a graded attempt once before advancing', async () => {
+    const mobileNode = {
+      id: 'mobile-intro', title: '导论', knowledgePoints: ['算法概览'], resources: [],
+      prerequisites: [], estimatedMinutes: 20, status: 'in_progress',
+    };
+    mocks.plan.mockResolvedValueOnce({ currentNode: mobileNode });
+    mocks.generate.mockImplementation(async (type: string) => ({
+      title: type,
+      content: type === 'quiz' ? JSON.stringify([{
+        type: 'choice', question: '哪项为常数时间？', options: ['按索引读数组', '遍历数组'],
+        answer: '按索引读数组', explanation: '索引直接定位。', knowledgePoints: ['算法概览'],
+      }]) : '讲解',
+    }));
+    const events = await streamed(await startPath(request('smartlearn', 'POST', {
+      action: 'start', client: 'mobile', goal: '学算法',
+    })));
+    const sessionId = events[0].sessionId;
+    expect(events.some(event => (event.metadata.resource as { type?: string } | undefined)?.type === 'quiz')).toBe(false);
+
+    const paths = (await (await listMobilePaths(request('mobile/learning-paths'))).json()).data.items;
+    expect(paths).toEqual([expect.objectContaining({ sessionId, currentNode: { id: mobileNode.id, title: mobileNode.title } })]);
+    const otherPaths = (await (await listMobilePaths(request('mobile/learning-paths', 'GET', undefined, other))).json()).data.items;
+    expect(otherPaths).toEqual([]);
+    const web = (await (await listResources(request('resources/sync?sessionId=' + sessionId))).json()).data.resources;
+    expect(web).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'document', metadata: expect.objectContaining({ origin: 'learning-path', nodeId: mobileNode.id }) }),
+      expect.objectContaining({ type: 'quiz', metadata: expect.objectContaining({ origin: 'learning-path', nodeId: mobileNode.id }) }),
+    ]));
+    const resourceId = web.find((resource: { type: string }) => resource.type === 'quiz').id;
+    const mobile = (await (await listMobileResources(request('mobile/resources?sessionId=' + sessionId))).json()).data.resources;
+    expect(mobile.find((resource: { id: string }) => resource.id === resourceId).content).toBe('');
+    const quizParams = { params: Promise.resolve({ resourceId }) };
+    const practice = (await (await getPractice(request('mobile/practice'), quizParams)).json()).data;
+    expect(practice.questions).toEqual([{ id: '1', type: 'choice', question: '哪项为常数时间？', options: ['按索引读数组', '遍历数组'] }]);
+    expect((await getPractice(request('mobile/practice', 'GET', undefined, other), quizParams)).status).toBe(404);
+    const advance = () => startPath(request('smartlearn', 'POST', {
+      action: 'node_complete', sessionId, currentNodeId: mobileNode.id,
+    }));
+    expect((await advance()).status).toBe(409);
+
+    const attemptId = crypto.randomUUID();
+    const body = { attemptId, version: practice.version, answers: { '1': '按索引读数组' } };
+    const submit = () => submitPractice(request('mobile/practice', 'POST', body), quizParams);
+    const [first, second] = await Promise.all([submit(), submit()]);
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual(await second.json());
+    const reportParams = { params: Promise.resolve({ attemptId }) };
+    const report = (await (await getReport(request('mobile/practice/attempts'), reportParams)).json()).data;
+    expect(report).toMatchObject({ attemptId, score: 100, correctCount: 1, total: 1 });
+    expect((await getReport(request('mobile/practice/attempts', 'GET', undefined, other), reportParams)).status).toBe(404);
+    expect(await prisma.learningSkillMastery.findUnique({ where: { userId_topic: { userId: owner, topic: '算法概览' } } })).toMatchObject({ reviewCount: 1 });
+
+    mocks.plan.mockResolvedValueOnce({ currentNode: { ...mobileNode, id: 'mobile-next', prerequisites: [mobileNode.id] } });
+    await streamed(await advance());
+    const updated = (await (await getPath(request('smartlearn?sessionId=' + sessionId))).json()).data.path;
+    expect(updated.nodes.map((node: { status: string }) => node.status)).toEqual(['completed', 'in_progress']);
+    expect(await prisma.learningSkillMastery.findUnique({ where: { userId_topic: { userId: owner, topic: '算法概览' } } })).toMatchObject({ reviewCount: 1 });
   });
 });

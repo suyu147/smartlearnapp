@@ -6,6 +6,10 @@ import type { LearningPath, LearningPathNode } from '@/lib/types/learning-path';
 import type { Resource, ResourceType } from '@/lib/types/resource';
 
 export const PATH_SESSION_MODE = 'learning-path';
+
+export function isMobilePath(session: { metadata: unknown }) {
+  return (session.metadata as { client?: string } | null)?.client === 'mobile';
+}
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
 
 export function mapPath(record: NonNullable<Awaited<ReturnType<typeof prisma.learningPath.findFirst>>>): LearningPath {
@@ -24,9 +28,11 @@ export function findPathSession(userId: string, id: string, includeLegacy = fals
   });
 }
 
-export async function createPathSession(userId: string, goal: string) {
+export async function createPathSession(userId: string, goal: string, mobile = false) {
   await ensureHistoryUser(userId);
-  return prisma.dtSession.create({ data: { userId, title: goal, mode: PATH_SESSION_MODE } });
+  return prisma.dtSession.create({
+    data: { userId, title: goal, mode: PATH_SESSION_MODE, ...(mobile ? { metadata: { client: 'mobile' } } : {}) },
+  });
 }
 
 export async function readGeneratedPath(userId: string, sessionId: string) {

@@ -1,4 +1,6 @@
 node_modules/
+mobile/.expo/
+mobile/android/
 .next/
 .env
 .env.local

@@ -6,6 +6,7 @@
 - 正在学习 Transformer 注意力机制，理解 Q、K、V 概念及缩放点积注意力公式 [^m_ms7e4v1t5itruq7iwt_0] <!--m_ms7e4v1t5itruq7iwt-->
 - 正在通过手动数值例子验证QKV和缩放点积注意力的计算步骤 [^m_ms7e5z4429t7oya5l2_0] <!--m_ms7e5z4429t7oya5l2-->
 - 通过手动数值计算和完整NumPy代码实现验证了缩放点积注意力和多头注意力的QKV计算、投影及因果掩码 [^m_ms7e72wa8906yicusd_0] <!--m_ms7e72wa8906yicusd-->
+- 学完注意力机制数学公式后，主动要求查看从零用 NumPy 实现的缩放点积注意力与多头注意力代码 [^m_mwytxjbqp8vo8ol7fq_0] <!--m_mwytxjbqp8vo8ol7fq-->
 
 ## Preferences
 
@@ -21,10 +22,16 @@
 - 长期目标：做金融数据分析 [^m_ms7dmf1f7ldqbho9fk_0] <!--m_ms7dmf1f7ldqbho9fk-->
 - 用户对Transformer架构表现出学习兴趣 [^m_ms7e18hq07xjzk6tij_0] <!--m_ms7e18hq07xjzk6tij-->
 - 正在学习Transformer中注意力机制的数学原理 [^m_ms7e4pyoggnt0ywcxa_0] <!--m_ms7e4pyoggnt0ywcxa-->
+- 在注意力机制学习中选择深入数学原理方向，而非HuggingFace上手或金融时序应用 [^m_mwytxhutydq0q1puxt_0] <!--m_mwytxhutydq0q1puxt-->
+- 表达想研究广义相对论的新学习兴趣，方向从深度学习/Transformer转向物理学 [^m_mwytxn7zi5a9855khy_0] <!--m_mwytxn7zi5a9855khy-->
 
 ## Difficulties
 
 - 薄弱点：Pandas时间序列处理（日期格式转换或滚动计算易错）和分组聚合（groupby、透视表逻辑复杂） [^m_ms7dmf1fj7u7j5ttr5_0] <!--m_ms7dmf1fj7u7j5ttr5-->
+
+## Questions
+
+- 主动追问当前对话为何未写入记忆，用户会检查并监督记忆保存流程是否落实 [^m_mwytxm12ezjlblalcc_0] <!--m_mwytxm12ezjlblalcc-->
 
 
 [^m_ms7dmf1fty5e4mfscd_0]: chat:profile-1784612191746
@@ -32,6 +39,7 @@
 [^m_ms7e4v1t5itruq7iwt_0]: chat:session-1785408311737
 [^m_ms7e5z4429t7oya5l2_0]: chat:session-1785408311737
 [^m_ms7e72wa8906yicusd_0]: chat:session-1785408311737
+[^m_mwytxjbqp8vo8ol7fq_0]: chat:session-1785408311737
 [^m_ms7dmf1fe7xk5gxatj_0]: chat:profile-1784612233363
 [^m_ms7dmf1fe7xk5gxatj_1]: chat:profile-1784612315652
 [^m_ms7dmf1f3fcpbqf3dk_0]: chat:profile-1784612315652
@@ -42,4 +50,7 @@
 [^m_ms7dmf1f7ldqbho9fk_0]: chat:profile-1784612355747
 [^m_ms7e18hq07xjzk6tij_0]: chat:session-1785408311737
 [^m_ms7e4pyoggnt0ywcxa_0]: chat:session-1785408311737
+[^m_mwytxhutydq0q1puxt_0]: chat:session-1785408311737
+[^m_mwytxn7zi5a9855khy_0]: chat:session-1785408311737
 [^m_ms7dmf1fj7u7j5ttr5_0]: chat:profile-1784612315652
+[^m_mwytxm12ezjlblalcc_0]: chat:session-1785408311737

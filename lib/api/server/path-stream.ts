@@ -9,7 +9,7 @@ import { createSSEStream } from '@/lib/server/sse-stream';
 import { smartLearnAiConfig } from '@/lib/server/smartlearn-input';
 import type { LearningPath } from '@/lib/types/learning-path';
 import { ALL_RESOURCE_TYPES, type ResourceType } from '@/lib/types/resource';
-import { persistNodeRecommendation, persistNodeResource, persistPlannedNode, readGeneratedPath } from './path-generation';
+import { isMobilePath, persistNodeRecommendation, persistNodeResource, persistPlannedNode, readGeneratedPath } from './path-generation';
 
 const resourceType = z.enum(ALL_RESOURCE_TYPES as [ResourceType, ...ResourceType[]]);
 const identifier = z.string().min(1).max(128);
@@ -31,6 +31,7 @@ const quizResult = z.object({
 
 export const pathRequestSchema = z.object({
   action: z.enum(['start', 'node_complete', 'quiz_result', 'tutor_chat']),
+  client: z.literal('mobile').optional(),
   goal: z.string().trim().min(1).max(500).optional(),
   sessionId: identifier.optional(),
   currentNodeId: identifier.nullable().optional(),
@@ -59,13 +60,19 @@ type PathInput = Omit<z.infer<typeof pathRequestSchema>, 'action'> & {
 
 export async function streamLearningPath(
   req: Request, userId: string, session: DtSession, path: LearningPath | null, body: PathInput,
+  evaluationFeedback: LearningStateType['evaluationFeedback'] = null,
 ) {
   const sessionId = session.id;
   const turnId = crypto.randomUUID();
   const source = 'smartlearn';
   const stream = createSSEStream(source, sessionId, async emit => {
     emit(createStreamEvent('session', { source, sessionId, turnId, metadata: { sessionId } }));
-    const write = createLearnEventWriter(emit, sessionId, turnId, source);
+    const mobilePath = isMobilePath(session);
+    const writeEvent = createLearnEventWriter(emit, sessionId, turnId, source);
+    const write: typeof writeEvent = event => {
+      if (mobilePath && event.type === 'resource_delta' && event.resource.type === 'quiz') return;
+      writeEvent(event);
+    };
     const active = path?.nodes.find(node => node.status === 'in_progress');
     if (body.action === 'start' && active && !body.currentNodeId) {
       write({ type: 'path_update', path: path! });
@@ -77,7 +84,7 @@ export async function streamLearningPath(
         .filter(node => node.status === 'completed' || (advancing && node.id === currentNode?.id))
         .map(node => ({ ...node, status: 'completed' as const }));
       const initialState: Partial<LearningStateType> = {
-        action: body.action, attemptId: body.attemptId ?? turnId, sessionId,
+        action: body.action, mobilePath, attemptId: body.attemptId ?? turnId, sessionId,
         goal: path?.goal ?? session.title, profile: profile.dimensions,
         completedNodes, currentNodeId: currentNode?.id ?? null, currentNodeTitle: currentNode?.title ?? null,
         currentNode, quizResults: body.quizResults ?? [], aiConfig: body.aiConfig,
@@ -86,7 +93,7 @@ export async function streamLearningPath(
         message: body.message ?? '', conversationHistory: body.conversationHistory ?? [],
         attachedResources: body.attachedResources ?? [],
         learnerSnapshot: null, resourcePlan: null, generatedResources: [],
-        evaluationResult: null, evaluationScore: null, evaluationFeedback: null, updatedProfile: null,
+        evaluationResult: null, evaluationScore: null, evaluationFeedback, updatedProfile: null,
       };
       await compileLearningGraph().invoke(initialState as LearningStateType, {
         configurable: {

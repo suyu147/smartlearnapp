@@ -8,7 +8,7 @@ import { evaluateNode } from '@/lib/learning-graph/nodes/evaluate';
 import type { LearningStateType } from '@/lib/learning-graph/state';
 import { createSSEStream } from '@/lib/server/sse-stream';
 import { pathRequestSchema, streamLearningPath } from '@/lib/api/server/path-stream';
-import { findPathSession, readGeneratedPath } from '@/lib/api/server/path-generation';
+import { findPathSession, isMobilePath, readGeneratedPath } from '@/lib/api/server/path-generation';
 import prisma from '@/lib/utils/database';
 
 const schema = pathRequestSchema.pick({
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
     if (body.mode === 'complete-node') {
       const session = body.sessionId ? await findPathSession(user.id, body.sessionId) : null;
       if (!session) return NextResponse.json({ error: '找不到学习会话' }, { status: 404 });
+      if (isMobilePath(session)) return NextResponse.json({ error: '请从 App 学习路径继续下一节' }, { status: 409 });
       const path = await readGeneratedPath(user.id, session.id);
       const node = path?.nodes.find(item => item.status === 'in_progress');
       if (!node || node.id !== body.currentNodeId) {

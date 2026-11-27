@@ -13,6 +13,7 @@ function buildFeedback(state: LearningStateType): PriorNodeFeedback[] {
 }
 
 import { initializeLearningTopics } from '../persistence';
+import { MOBILE_PATH_RESOURCES } from '@/lib/mobile/questions';
 
 function getUserId(config: { configurable?: { userId?: string } }): string {
   return config.configurable?.userId ?? 'anonymous';
@@ -64,7 +65,7 @@ export async function planResourcesNode(
     const suppressTypes: ResourceType[] = evaluationFeedback?.strongPoints?.length
       ? ['document']
       : [];
-    const decision = applyOverrides(overrideTypes, decideNodeResourcePlan({
+    const planned = decideNodeResourcePlan({
       node: buildNodeDecisionContext(node, Math.max(state.completedNodes.length, 0), Math.max(state.completedNodes.length + 1, 1)),
       profile: state.profile,
       existingResources: node.resources,
@@ -77,8 +78,10 @@ export async function planResourcesNode(
         maxTypes: state.learnerSnapshot?.currentStage === 'practice' ? 3 : 4,
         boostTypes,
         suppressTypes,
+        forceInclude: state.mobilePath ? [...MOBILE_PATH_RESOURCES] : undefined,
       },
-    }));
+    });
+    const decision = applyOverrides(overrideTypes && !state.mobilePath ? overrideTypes : undefined, planned);
 
     write({ type: 'resource_decision', nodeId: node.id, decision });
     write({ type: 'phase_end', phase: 'resource_plan' });

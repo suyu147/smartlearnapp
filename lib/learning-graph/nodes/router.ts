@@ -8,6 +8,7 @@ export function routeByAction(state: LearningStateType) {
       // Skip plan_node — go directly to analyze_learner for an existing node
       return 'analyze_learner';
     case 'node_complete':
+      return state.mobilePath ? 'plan_node' : 'evaluate';
     case 'quiz_result':
       return 'evaluate';
     case 'tutor_chat':

@@ -8,6 +8,7 @@ import type { EvaluationResultPayload, LearnRequest, LearnerSnapshot, QuizResult
 
 export const LearningState = Annotation.Root({
   action: Annotation<LearnRequest['action']>(),
+  mobilePath: Annotation<boolean | undefined>(),
   sessionId: Annotation<string>(),
   attemptId: Annotation<string | undefined>(),
   profile: Annotation<ProfileDimensions>(),

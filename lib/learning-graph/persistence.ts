@@ -9,6 +9,23 @@ function nextReviewDate(reviewCount: number, now: Date): Date {
   return date;
 }
 
+export function updateTopicMastery(
+  existing: { mastery: number; reviewCount: number; streak: number } | null,
+  correct: boolean,
+  difficulty: number,
+  now: Date,
+) {
+  const reviewCount = (existing?.reviewCount ?? 0) + 1;
+  return {
+    mastery: Math.max(0, Math.min(1, (existing?.mastery ?? 0) * 0.7 + (correct ? 0.3 : 0))),
+    reviewCount,
+    streak: correct ? (existing?.streak ?? 0) + 1 : 0,
+    lastReviewedAt: now,
+    nextReviewAt: nextReviewDate(reviewCount, now),
+    difficulty,
+  };
+}
+
 export interface LearningGraphPersistenceInput {
   userId: string;
   sessionId: string;
@@ -81,31 +98,11 @@ export async function persistLearningEvaluation(input: LearningGraphPersistenceI
     const existing = await prisma.learningSkillMastery.findUnique({
       where: { userId_topic: { userId: input.userId, topic: result.topic } },
     });
-    const reviewCount = (existing?.reviewCount ?? 0) + 1;
-    const previousMastery = existing?.mastery ?? 0;
-    const mastery = Math.max(0, Math.min(1, previousMastery * 0.7 + (result.correct ? 0.3 : 0)));
-    const streak = result.correct ? (existing?.streak ?? 0) + 1 : 0;
-
+    const mastery = updateTopicMastery(existing, result.correct, result.difficulty, now);
     await prisma.learningSkillMastery.upsert({
       where: { userId_topic: { userId: input.userId, topic: result.topic } },
-      update: {
-        mastery,
-        lastReviewedAt: now,
-        reviewCount,
-        streak,
-        nextReviewAt: nextReviewDate(reviewCount, now),
-        difficulty: result.difficulty,
-      },
-      create: {
-        userId: input.userId,
-        topic: result.topic,
-        mastery,
-        lastReviewedAt: now,
-        reviewCount,
-        streak,
-        nextReviewAt: nextReviewDate(reviewCount, now),
-        difficulty: result.difficulty,
-      },
+      update: mastery,
+      create: { userId: input.userId, topic: result.topic, ...mastery },
     });
   }
 }
