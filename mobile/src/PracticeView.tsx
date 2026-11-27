@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { ApiError, api } from './api';
-import type { Practice, Report, ReviewTarget } from './types';
-import { readDraft, saveDraft, type PracticeDraft } from './learning-storage';
+import { ApiError, api, isTemporaryError } from './api';
+import type { Practice, Report, ReviewBatch, ReviewTarget } from './types';
+import { getLearning, isSubmissionQueued, queueSubmission, readDraft, saveBatch, saveDraft, sendQueuedSubmission, type PracticeDraft } from './learning-storage';
 import { Button, Card, Field, Heading, Notice, Section, color, styles } from './ui';
+import MarkdownContent from './MarkdownContent';
 
 const reportEndpoint = (attemptId: string) => '/mobile/practice/attempts/' + encodeURIComponent(attemptId);
 
-export default function PracticeView({ resourceId, accountId, token, reportId, review, onBack, onAuthError, onReview, onPractice }: {
-  resourceId: string; accountId: string; token: string; reportId?: string; review?: ReviewTarget;
-  onBack: () => void; onAuthError: () => void; onReview: (report: Report) => void;
-  onPractice: (resourceId: string) => void;
+export default function PracticeView({ resourceId, accountId, token, reportId, review, batch, syncRevision, onBack, onAuthError, onReview, onPractice, onNextBatch }: {
+  resourceId?: string; accountId: string; token: string; reportId?: string; review?: ReviewTarget; batch?: ReviewBatch;
+  syncRevision: number;
+  onBack: () => void; onAuthError: () => void; onReview: (report: Exclude<Report, { kind: 'batch' }>) => void;
+  onPractice: (resourceId: string) => void; onNextBatch: (batch: ReviewBatch) => void;
 }) {
   const [practice, setPractice] = useState<Practice>();
   const [draft, setDraft] = useState<PracticeDraft>();
@@ -22,41 +24,52 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [staleBatch, setStaleBatch] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [queued, setQueued] = useState(false);
   const request = useRef<AbortController | null>(null);
   const draftRef = useRef<PracticeDraft | undefined>(undefined);
-  const encodedResource = encodeURIComponent(resourceId);
+  const encodedResource = encodeURIComponent(resourceId ?? '');
+  const batchRefs = batch && JSON.stringify(batch.refs);
   const reviewKey = review && ('reportId' in review ? 'reportId=' + review.reportId : 'questionId=' + review.questionId);
-  const reviewVersion = review?.version;
-  const endpoint = reviewKey
+  const reviewVersion = batch ? 1 : review?.version;
+  const endpoint = batch ? '/mobile/review/batch' : reviewKey
     ? '/mobile/review/' + encodedResource + '?' + reviewKey
     : '/mobile/practice/' + encodedResource;
-  const draftKey = reviewKey ? ['review', resourceId, reviewVersion, reviewKey].join('-') : resourceId;
+  const draftKey = batch ? 'review-batch' : reviewKey ? ['review', resourceId, reviewVersion, reviewKey].join('-') : resourceId ?? '';
 
   useEffect(() => {
     const active = new AbortController();
     setLoading(true);
     setError('');
+    setStaleBatch(false);
     async function load() {
       if (reportId) {
-        const result = await api<Report>(reportEndpoint(reportId), token, undefined, active.signal);
-        if (!active.signal.aborted) setReport(result);
+        const result = await getLearning<Report>(accountId, reportEndpoint(reportId), token, active.signal);
+        if (!active.signal.aborted) { setOffline(result.offline); setReport(result.data); }
         return;
       }
       const reviewDraft = reviewVersion === undefined ? undefined : readDraft(accountId, draftKey, reviewVersion);
       if (reviewDraft?.attemptId) {
         try {
-          const result = await api<Report>(reportEndpoint(reviewDraft.attemptId), token, undefined, active.signal);
+          const result = await getLearning<Report>(accountId, reportEndpoint(reviewDraft.attemptId), token, active.signal);
           if (active.signal.aborted) return;
-          try { saveDraft(accountId, draftKey); } catch { setStorageError(true); }
-          setReport(result);
+          try {
+            saveDraft(accountId, draftKey);
+            if (batchRefs) saveBatch(accountId);
+          } catch { setStorageError(true); }
+          setOffline(result.offline);
+          setReport(result.data);
           return;
         } catch (cause) {
-          if (!(cause instanceof ApiError) || cause.status !== 404) throw cause;
+          if (!isTemporaryError(cause) && (!(cause instanceof ApiError) || cause.status !== 404)) throw cause;
         }
       }
-      const url = reviewKey ? endpoint + '&version=' + reviewVersion : endpoint;
-      const current = await api<Practice>(url, token, undefined, active.signal);
+      const url = batchRefs ? endpoint + '?refs=' + encodeURIComponent(batchRefs) : reviewKey ? endpoint + '&version=' + reviewVersion : endpoint;
+      const result = await getLearning<Practice>(accountId, url, token, active.signal);
       if (active.signal.aborted) return;
+      const current = result.data;
+      setOffline(result.offline);
       const saved = reviewDraft ?? readDraft(accountId, draftKey, current.version);
       const answers = Object.fromEntries(current.questions.flatMap(question => {
         const answer = saved?.answers[question.id];
@@ -69,24 +82,49 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
       setDraft(initial);
       setRestored(!!saved && Object.values(answers).some(answer => answer.trim()));
       setPractice(current);
-      const openReport = saved?.attemptId === current.latestAttemptId ? saved?.attemptId : undefined;
+      setQueued(!!saved?.attemptId && isSubmissionQueued(accountId, saved.attemptId));
+      const openReport = saved?.attemptId && !result.offline && !isSubmissionQueued(accountId, saved.attemptId) ? saved.attemptId : undefined;
       if (openReport) {
-        const result = await api<Report>(reportEndpoint(openReport), token, undefined, active.signal);
-        if (active.signal.aborted) return;
-        if (openReport === saved?.attemptId) {
+        try {
+          const result = await getLearning<Report>(accountId, reportEndpoint(openReport), token, active.signal);
+          if (active.signal.aborted) return;
           try { saveDraft(accountId, draftKey); } catch { setStorageError(true); }
           setRestored(false);
+          setReport(result.data);
+        } catch (cause) {
+          if (!isTemporaryError(cause) && (!(cause instanceof ApiError) || cause.status !== 404)) throw cause;
         }
-        setReport(result);
       }
     }
     void load().catch(cause => {
       if (active.signal.aborted) return;
       if (cause instanceof ApiError && cause.status === 401) onAuthError();
-      else setError(cause instanceof Error ? cause.message : '无法读取题目');
+      else {
+        setStaleBatch(!!batchRefs && cause instanceof ApiError && [404, 409].includes(cause.status));
+        setError(cause instanceof Error ? cause.message : '无法读取题目');
+      }
     }).finally(() => { if (!active.signal.aborted) setLoading(false); });
     return () => { active.abort(); request.current?.abort(); };
-  }, [endpoint, token, retry, onAuthError, accountId, draftKey, reportId, reviewKey, reviewVersion]);
+  }, [endpoint, token, retry, onAuthError, accountId, draftKey, reportId, reviewKey, reviewVersion, batchRefs]);
+
+  useEffect(() => {
+    const id = draftRef.current?.attemptId;
+    if (!id || !queued || request.current || !syncRevision || isSubmissionQueued(accountId, id)) return;
+    const controller = new AbortController();
+    void getLearning<Report>(accountId, reportEndpoint(id), token, controller.signal).then(({ data }) => {
+      if (controller.signal.aborted || draftRef.current?.attemptId !== id) return;
+      setReport(data);
+      setQueued(false);
+      setError('');
+      try { saveDraft(accountId, draftKey); if (batchRefs) saveBatch(accountId); } catch { setStorageError(true); }
+    }).catch(cause => {
+      if (!controller.signal.aborted && cause instanceof ApiError && cause.status === 404) {
+        setQueued(false);
+        setError('提交未被服务器接受，请重新提交或刷新题目。');
+      }
+    });
+    return () => controller.abort();
+  }, [syncRevision, queued, token, accountId, draftKey, batchRefs]);
 
   function updateDraft(value: PracticeDraft, persist = true) {
     draftRef.current = value;
@@ -101,7 +139,7 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
 
   function changeAnswer(questionId: string, answer: string) {
     const previous = draftRef.current;
-    if (!previous || request.current) return;
+    if (!previous || request.current || queued) return;
     if (previous.answers[questionId] === answer) return;
     updateDraft({ ...previous, attemptId: undefined, answers: { ...previous.answers, [questionId]: answer } });
   }
@@ -115,30 +153,48 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
     setError('');
     try {
       if (attemptId) {
-        const result = await api<Report>(reportEndpoint(attemptId), token, undefined, active.signal);
-        if (!active.signal.aborted) setReport(result);
+        const result = await getLearning<Report>(accountId, reportEndpoint(attemptId), token, active.signal);
+        if (!active.signal.aborted) { setOffline(result.offline); setReport(result.data); }
       }
       else {
         const submission = { ...current, attemptId: current.attemptId ?? Crypto.randomUUID() };
         updateDraft(submission);
-        const result = await api<Report>(reviewKey ? endpoint : endpoint + '/attempts', token, {
-          attemptId: submission.attemptId, version: submission.version, answers: submission.answers,
-        }, active.signal);
+        const path = reviewKey || batch ? endpoint : endpoint + '/attempts';
+        const body = {
+          attemptId: submission.attemptId, answers: submission.answers,
+          ...(batch ? { refs: batch.refs } : { version: submission.version }),
+        };
+        let persisted = false;
+        try {
+          queueSubmission(accountId, submission.attemptId, path, body);
+          persisted = true;
+        } catch { setStorageError(true); }
+        const result = persisted ? await sendQueuedSubmission(accountId, submission.attemptId, token, active.signal)
+          : await api<Report>(path, token, body, active.signal);
         if (active.signal.aborted) return;
+        setQueued(false);
+        setOffline(false);
         updateDraft({ version: current.version, answers: {}, step: 0 }, false);
-        setPractice({ ...practice, latestAttemptId: reviewKey ? null : result.attemptId });
+        try { if (batch) saveBatch(accountId); } catch { setStorageError(true); }
+        setPractice({ ...practice, latestAttemptId: reviewKey || batch ? null : result.attemptId });
         setRestored(false);
         setReport(result);
       }
     } catch (cause) {
       if (active.signal.aborted) return;
       if (cause instanceof ApiError && cause.status === 401) onAuthError();
+      else if (!attemptId && isTemporaryError(cause) && draftRef.current?.attemptId &&
+        isSubmissionQueued(accountId, draftRef.current.attemptId)) setQueued(true);
       else if (cause instanceof ApiError && cause.status === 409 && !attemptId) {
-        updateDraft({ version: current.version, step: 0, answers: {} }, false);
+        setQueued(false);
+        if (batch) setStaleBatch(true);
         setPractice(undefined);
         setRestored(false);
         setError(cause.message);
-      } else setError(cause instanceof Error ? cause.message : '无法读取报告');
+      } else {
+        setQueued(false);
+        setError(cause instanceof Error ? cause.message : '无法读取报告');
+      }
     } finally {
       request.current = null;
       if (!active.signal.aborted) setBusy(false);
@@ -146,24 +202,26 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
   }
 
   if (report) return <>
-    <Heading title={report.kind === 'review' ? '重练报告' : '练习报告'} detail={report.title} />
+    <Heading title={report.kind === 'practice' ? '练习报告' : '复习报告'} detail={report.title} />
+    {offline ? <Notice text="正在查看本机缓存的报告" /> : null}
     <Card><View style={local.scoreBlock}>
       <Text style={local.score}>{report.score}<Text style={local.unit}> 分</Text></Text>
       <Text style={styles.detail}>本次 {report.total} 题，答对 {report.correctCount} 题</Text>
     </View></Card>
     {report.focusTopics.length ? <Notice text={'建议复习 ' + report.focusTopics.join('、')} /> : null}
-    {report.correctCount < report.total && report.version ? <Button label="重练本次错题" action={() => onReview(report)} /> : null}
+    {report.kind !== 'batch' && report.correctCount < report.total && report.version ? <Button label="重练本次错题" action={() => onReview(report)} /> : null}
+    {batch ? <Button label="返回列表查看剩余题目" action={() => onNextBatch(batch)} /> : null}
     <Section>逐题解析</Section>
     {report.answers.map(item => <Card key={item.id}>
       <Text style={[styles.detail, { color: item.correct ? color.green : color.red }]}>{item.correct ? '回答正确' : '本次答错'} · {item.topic}</Text>
-      <Text style={styles.rowTitle}>{item.question}</Text>
+      <MarkdownContent content={item.question} />
       <Text style={styles.body}>你的答案　{item.userAnswer}</Text>
       <Text style={styles.body}>参考答案　{item.correctAnswer}</Text>
-      {item.explanation ? <Text style={styles.detail}>{item.explanation}</Text> : null}
+      {item.explanation ? <MarkdownContent content={item.explanation} /> : null}
     </Card>)}
-    <Button label={report.kind === 'review' ? '返回复习入口' : '返回继续学习'} secondary action={onBack} />
-    {report.kind !== 'review' ? <Button label={Object.values(draft?.answers ?? {}).some(answer => answer.trim()) ? '返回答题草稿' : '再练一次'}
-      secondary action={() => practice ? setReport(undefined) : onPractice(resourceId)} /> : null}
+    <Button label={report.kind === 'practice' ? '返回继续学习' : '返回'} secondary action={onBack} />
+    {report.kind === 'practice' ? <Button label={Object.values(draft?.answers ?? {}).some(answer => answer.trim()) ? '返回答题草稿' : '再练一次'}
+      secondary action={() => practice ? setReport(undefined) : onPractice(report.resourceId)} /> : null}
   </>;
   const answers = draft?.answers ?? {};
   const step = draft?.step ?? 0;
@@ -171,29 +229,34 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
   const total = practice?.questions.length ?? 0;
   const answered = question ? Boolean(answers[question.id]?.trim()) : false;
   return <>
-    <Heading title={reportId ? '练习报告' : reviewKey ? '错题重练' : '随堂练习'} detail={practice?.title} />
+    <Heading title={reportId ? '练习报告' : batch ? '整组错题复习' : reviewKey ? '错题重练' : '随堂练习'} detail={batch ? undefined : practice?.title} />
     {loading ? <Notice text="正在读取题目" busy /> : null}
     {error ? <Notice text={error} error /> : null}
+    {offline ? <Notice text="正在使用本机缓存的题目" /> : null}
+    {queued ? <Notice text="答案已保存在本机，连接恢复后会自动提交。" /> : null}
     {storageError ? <Notice text="暂时无法保存本机草稿" error /> : null}
     {restored && !loading ? <Notice text="已恢复本机答题草稿" /> : null}
-    {!practice && !loading ? <Button label="重新加载" action={() => setRetry(value => value + 1)} /> : null}
+    {batch && staleBatch ? <Button label="返回列表重新选题" action={() => {
+      try { saveBatch(accountId); } catch { setStorageError(true); return; }
+      onNextBatch(batch);
+    }} /> : !practice && !loading ? <Button label="重新加载" action={() => setRetry(value => value + 1)} /> : null}
     {practice && question && draft && !loading ? <>
       {practice.latestAttemptId ? <Button label="查看上次报告" secondary disabled={busy} action={() => void finish(practice.latestAttemptId ?? undefined)} /> : null}
       <Text style={styles.detail}>第 {step + 1} / {total} 题</Text>
       <View style={local.track}><View style={[local.bar, { width: `${(step + 1) / total * 100}%` }]} /></View>
-      <Section>{question.question}</Section>
+      <Card><MarkdownContent content={question.question} /></Card>
       {question.type === 'choice' ? question.options?.map((option, index) => {
         const checked = answers[question.id] === option;
-        return <Pressable accessibilityRole="radio" accessibilityState={{ checked }} disabled={busy} key={index}
+        return <Pressable accessibilityRole="radio" accessibilityState={{ checked }} disabled={busy || queued} key={index}
           onPress={() => changeAnswer(question.id, option)}
           style={[local.option, checked && local.selected]}>
-          <Text style={local.letter}>{String.fromCharCode(65 + index)}</Text><Text style={[styles.body, local.optionText]}>{option}</Text>
+          <Text style={local.letter}>{String.fromCharCode(65 + index)}</Text><View style={local.optionText}><MarkdownContent content={option} unwrap={false} /></View>
         </Pressable>;
-      }) : <Field key={question.id} accessibilityLabel="答案" placeholder="输入答案" maxLength={2000} editable={!busy}
+      }) : <Field key={question.id} accessibilityLabel="答案" placeholder="输入答案" maxLength={2000} editable={!busy && !queued}
         value={answers[question.id] ?? ''} onChangeText={value => changeAnswer(question.id, value)} />}
       {step < total - 1 ?
         <Button label="下一题" disabled={!answered || busy} action={() => updateDraft({ ...draft, step: step + 1 })} /> :
-        <Button label={busy ? '正在载入…' : '提交并查看报告'}
+        <Button label={busy ? '正在载入…' : queued ? '立即重试提交' : '提交并查看报告'}
           disabled={busy || practice.questions.some(item => !answers[item.id]?.trim())} action={() => void finish()} />}
       {step > 0 ? <Button label="上一题" secondary disabled={busy} action={() => updateDraft({ ...draft, step: step - 1 })} /> : null}
     </> : null}

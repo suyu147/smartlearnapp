@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
 import { createPathSession, findPathSession, isMobilePath, readGeneratedPath } from '@/lib/api/server/path-generation';
-import { streamLearningPath, pathRequestSchema } from '@/lib/api/server/path-stream';
+import { isMobileGenerationRunning, streamLearningPath, pathRequestSchema } from '@/lib/api/server/path-stream';
 import { latestNodePractice } from '@/lib/mobile/practice';
 
 export async function GET(req: NextRequest) {
@@ -11,7 +11,9 @@ export async function GET(req: NextRequest) {
     const session = await findPathSession(user.id, sessionId, true);
     if (!session) return NextResponse.json({ error: '找不到学习会话' }, { status: 404 });
     const path = await readGeneratedPath(user.id, sessionId);
-    return NextResponse.json({ success: true, data: { sessionId, path } });
+    return NextResponse.json({ success: true, data: {
+      sessionId, path, ...(isMobilePath(session) ? { generating: isMobileGenerationRunning(user.id, sessionId) } : {}),
+    } });
   });
 }
 

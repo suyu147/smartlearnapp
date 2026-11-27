@@ -43,12 +43,29 @@ export function findNodeQuiz(userId: string, resourceId: string, db: Prisma.Tran
 
 const reportInclude = { quizAttempts: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } } satisfies Prisma.LearningMasterySessionInclude;
 type ReportRecord = Prisma.LearningMasterySessionGetPayload<{ include: typeof reportInclude }>;
+export type ReviewQuestionRef = { resourceId: string; version: number; questionId: string };
 export type ReviewSelection = { reportId: string } | { questionId: string };
-export type ReportMetadata = {
+type SingleReportMetadata = {
   source: 'mobile-practice' | 'mobile-review';
   resourceId: string; sessionId: string; nodeId: string; version: number; attemptId: string;
   answers: Record<string, string>; review?: ReviewSelection;
 };
+export type ReportMetadata = SingleReportMetadata | {
+  source: 'mobile-review-batch'; attemptId: string; fingerprint: string;
+};
+type GradedAnswer = NonNullable<ReturnType<typeof gradePractice>>[number];
+type SavedAnswer = GradedAnswer & { reference?: ReviewQuestionRef; resourceTitle?: string };
+
+export function quizAnswerReference(metadata: ReportMetadata, answer: { metadata: Prisma.JsonValue }): ReviewQuestionRef | undefined {
+  const question = answer.metadata as Partial<ReviewQuestionRef> | null;
+  if (!question?.questionId) return;
+  if (metadata.source !== 'mobile-review-batch') {
+    return { resourceId: metadata.resourceId, version: metadata.version, questionId: question.questionId };
+  }
+  if (question.resourceId && question.version) {
+    return { resourceId: question.resourceId, version: question.version, questionId: question.questionId };
+  }
+}
 
 const attemptKey = (userId: string, attemptId: string) => `${userId}:mobile-practice:${attemptId}`;
 
@@ -56,6 +73,7 @@ export const mobileAnswerSources: Prisma.LearningMasterySessionWhereInput = {
   OR: [
     { metadata: { path: ['source'], equals: 'mobile-practice' } },
     { metadata: { path: ['source'], equals: 'mobile-review' } },
+    { metadata: { path: ['source'], equals: 'mobile-review-batch' } },
   ],
 };
 
@@ -63,13 +81,18 @@ function reportDto(record: ReportRecord, metadata: ReportMetadata) {
   const correctCount = record.quizAttempts.filter(answer => answer.correct).length;
   const total = record.quizAttempts.length;
   return {
-    attemptId: metadata.attemptId, pathSessionId: metadata.sessionId, nodeId: metadata.nodeId, resourceId: metadata.resourceId,
-    title: record.title, version: metadata.version, kind: metadata.review ? 'review' as const : 'practice' as const,
+    attemptId: metadata.attemptId,
+    ...(metadata.source === 'mobile-review-batch' ? { kind: 'batch' as const } : {
+      pathSessionId: metadata.sessionId, nodeId: metadata.nodeId, resourceId: metadata.resourceId,
+      version: metadata.version, kind: metadata.review ? 'review' as const : 'practice' as const,
+    }),
+    title: record.title,
     total, correctCount, score: Math.round(correctCount / total * 100), completedAt: record.completedAt,
     focusTopics: (record.evaluation as { suggestedFocus?: string[] } | null)?.suggestedFocus ?? [],
     answers: record.quizAttempts.map(({ id, topic, question, userAnswer, correctAnswer, correct, explanation, metadata }) => ({
       id, topic, question, userAnswer, correctAnswer, correct, explanation,
-      questionIndex: Number((metadata as { questionId?: string } | null)?.questionId ?? '0'),
+      questionIndex: Number((metadata as { position?: string; questionId?: string } | null)?.position ??
+        (metadata as { questionId?: string } | null)?.questionId ?? '0'),
     })).sort((a, b) => a.questionIndex - b.questionIndex),
   };
 }
@@ -101,24 +124,57 @@ export async function latestNodePractice(userId: string, sessionId: string, node
 export type QuestionSelectionResult = { questionIds: string[] } | { status: number; error: string };
 type ResolveReviewQuestions = (db: Prisma.TransactionClient) => Promise<QuestionSelectionResult>;
 
+export function saveMobileAttempt(
+  userId: string, attemptId: string,
+  prepare: (tx: Prisma.TransactionClient) => Promise<
+    { status: number; error: string } | { graded: SavedAnswer[]; metadata: ReportMetadata; title: string }
+  >,
+  matches: (metadata: ReportMetadata) => boolean,
+) {
+  return prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+    const id = attemptKey(userId, attemptId);
+    const previous = await tx.learningMasterySession.findFirst({ where: { id, userId }, include: reportInclude });
+    if (previous) {
+      const metadata = previous.metadata as unknown as ReportMetadata;
+      return matches(metadata) ? { data: reportDto(previous, metadata) } : { status: 409, error: '此提交编号已用于其他答案' };
+    }
+
+    const prepared = await prepare(tx);
+    if ('error' in prepared) return prepared;
+    const { graded, metadata, title } = prepared;
+    const topics = [...new Set(graded.map(answer => answer.topic))];
+    const weakPoints = [...new Set(graded.filter(answer => !answer.correct).map(answer => answer.topic))];
+    const overallScore = Math.round(graded.filter(answer => answer.correct).length / graded.length * 100);
+    const now = new Date();
+    const record = await tx.learningMasterySession.create({
+      data: {
+        id, userId, title, topics, startedAt: now, completedAt: now, metadata,
+        evaluation: {
+          weakPoints, strongPoints: topics.filter(topic => !weakPoints.includes(topic)), suggestedFocus: weakPoints, overallScore,
+          feedback: weakPoints.length ? '建议复习：' + weakPoints.join('、') : '已答对全部题目',
+        },
+        quizAttempts: { create: graded.map(({ questionId, reference, resourceTitle, ...answer }) => ({
+          ...answer, userId, metadata: reference ? { ...reference, resourceTitle, position: questionId } : { questionId },
+        })) },
+      },
+      include: reportInclude,
+    });
+    for (const { topic, correct, difficulty } of graded) {
+      const where = { userId_topic: { userId, topic } };
+      const existing = await tx.learningSkillMastery.findUnique({ where });
+      const data = updateTopicMastery(existing, correct, difficulty, now);
+      await tx.learningSkillMastery.upsert({ where, create: { userId, topic, ...data }, update: data });
+    }
+    return { data: reportDto(record, metadata) };
+  });
+}
+
 export async function submitPractice(
   userId: string, resourceId: string, submission: z.infer<typeof submissionSchema>,
   review?: { selection: ReviewSelection; resolve: ResolveReviewQuestions },
 ) {
-  return prisma.$transaction(async tx => {
-    // Serialize this user's submissions so retries and mastery updates are atomic.
-    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
-    const id = attemptKey(userId, submission.attemptId);
-    const previous = await tx.learningMasterySession.findFirst({ where: { id, userId }, include: reportInclude });
-    if (previous) {
-      const metadata = previous.metadata as unknown as ReportMetadata;
-      const matches = metadata.resourceId === resourceId && metadata.version === submission.version &&
-        JSON.stringify(metadata.review ?? null) === JSON.stringify(review?.selection ?? null) &&
-        Object.keys(metadata.answers).length === Object.keys(submission.answers).length &&
-        Object.entries(metadata.answers).every(([key, answer]) => submission.answers[key] === answer);
-      return matches ? { data: reportDto(previous, metadata) } : { status: 409, error: '此提交编号已用于其他答案' };
-    }
-
+  return saveMobileAttempt(userId, submission.attemptId, async tx => {
     const linked = await findNodeQuiz(userId, resourceId, tx);
     if (!linked?.path.sessionId) return { status: 404, error: '找不到随堂练习' };
     if (linked.resource.revision !== submission.version) return { status: 409, error: '题目已更新，请重新打开练习' };
@@ -134,33 +190,14 @@ export async function submitPractice(
     const graded = gradePractice(questions, submission.answers, linked.resource.title);
     if (!graded) return { status: 400, error: '请作答全部题目' };
 
-    const topics = [...new Set(graded.map(answer => answer.topic))];
-    const weakPoints = [...new Set(graded.filter(answer => !answer.correct).map(answer => answer.topic))];
-    const overallScore = Math.round(graded.filter(answer => answer.correct).length / graded.length * 100);
-    const metadata: ReportMetadata = {
+    const metadata: SingleReportMetadata = {
       source: review ? 'mobile-review' : 'mobile-practice', resourceId, sessionId: linked.path.sessionId, nodeId: linked.nodeId,
       version: submission.version, attemptId: submission.attemptId, answers: submission.answers,
       ...(review ? { review: review.selection } : {}),
     };
-    const now = new Date();
-    const record = await tx.learningMasterySession.create({
-      data: {
-        id, userId, title: linked.resource.title, topics, startedAt: now, completedAt: now,
-        metadata,
-        evaluation: {
-          weakPoints, strongPoints: topics.filter(topic => !weakPoints.includes(topic)), suggestedFocus: weakPoints, overallScore,
-          feedback: weakPoints.length ? '建议复习：' + weakPoints.join('、') : '已答对全部题目',
-        },
-        quizAttempts: { create: graded.map(({ questionId, ...answer }) => ({ ...answer, userId, metadata: { questionId } })) },
-      },
-      include: reportInclude,
-    });
-    for (const { topic, correct, difficulty } of graded) {
-      const where = { userId_topic: { userId, topic } };
-      const existing = await tx.learningSkillMastery.findUnique({ where });
-      const data = updateTopicMastery(existing, correct, difficulty, now);
-      await tx.learningSkillMastery.upsert({ where, create: { userId, topic, ...data }, update: data });
-    }
-    return { data: reportDto(record, metadata) };
-  });
+    return { graded, metadata, title: linked.resource.title };
+  }, metadata => metadata.source !== 'mobile-review-batch' && metadata.resourceId === resourceId &&
+    metadata.version === submission.version && JSON.stringify(metadata.review ?? null) === JSON.stringify(review?.selection ?? null) &&
+    Object.keys(metadata.answers).length === Object.keys(submission.answers).length &&
+    Object.entries(metadata.answers).every(([key, answer]) => submission.answers[key] === answer));
 }

@@ -15,6 +15,9 @@ import { POST as submitPractice } from '@/app/api/v1/mobile/practice/[resourceId
 import { GET as getReport } from '@/app/api/v1/mobile/practice/attempts/[attemptId]/route';
 import { GET as listReview } from '@/app/api/v1/mobile/review/route';
 import { GET as getReview, POST as submitReview } from '@/app/api/v1/mobile/review/[resourceId]/route';
+import { GET as getBatch, POST as submitBatch } from '@/app/api/v1/mobile/review/batch/route';
+import { GET as getMobileStats } from '@/app/api/v1/mobile/stats/route';
+import { localDay } from '@/lib/mobile/calendar';
 import { DEFAULT_DIMENSIONS } from '@/lib/types/profile';
 import type { StreamEvent } from '@/lib/deeptutor/core/types';
 
@@ -329,5 +332,113 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
     expect(itemsForResource(await mistakes())).toEqual([expect.objectContaining({ questionId: '2', canReview: false })]);
     expect(itemsForResource(await mistakes('mode=today'))).toEqual([]);
     expect((await (await lookup(attemptId)).json()).data).toEqual(originalReport);
+  });
+
+  it('grades one review across courses and counts distinct questions in daily progress', async () => {
+    const session = await prisma.dtSession.create({
+      data: { userId: owner, title: '整组复习测试', mode: 'learning-path', metadata: { client: 'mobile' } },
+    });
+    const path = await prisma.learningPath.create({ data: {
+      userId: owner, sessionId: session.id, goal: '学习复习', nodes: [], edges: [],
+    } });
+    const seed = async (title: string, correct: string) => {
+      const quiz = await prisma.resource.create({ data: {
+        userId: owner, sessionId: session.id, type: 'quiz', status: 'ready', title, sourceAgent: 'fixture',
+        content: JSON.stringify([{ type: 'fill', question: title, answer: correct, knowledgePoints: [title] }]),
+        pathNodes: { create: { pathId: path.id, nodeId: title } },
+      } });
+      const response = await submitPractice(request('mobile/practice', 'POST', {
+        attemptId: crypto.randomUUID(), version: quiz.revision, answers: { '1': '错误' },
+      }), { params: Promise.resolve({ resourceId: quiz.id }) });
+      expect(response.status).toBe(200);
+      return { resourceId: quiz.id, version: quiz.revision, questionId: '1' };
+    };
+    const refs = [await seed('循环', '迭代'), await seed('函数', '复用')];
+    const today = async () => (await (await listReview(request('mobile/review?mode=today&tzOffset=-480'))).json()).data;
+    const before = await today();
+    expect(before.batch).toEqual(expect.arrayContaining(refs));
+    const batchRoute = 'mobile/review/batch';
+    const get = (user = owner) => getBatch(request(batchRoute + '?refs=' + encodeURIComponent(JSON.stringify(refs)), 'GET', undefined, user));
+    expect((await get(other)).status).toBe(404);
+    expect((await (await get()).json()).data.questions).toEqual([
+      { question: '循环', type: 'fill', id: '1' }, { question: '函数', type: 'fill', id: '2' },
+    ]);
+    const attemptId = crypto.randomUUID();
+    const body = { attemptId, refs, answers: { '1': '迭代', '2': '错误' } };
+    const submit = (payload = body) => submitBatch(request(batchRoute, 'POST', payload));
+    const [submitted, repeated] = await Promise.all([submit(), submit()]);
+    const result = (await submitted.json()).data;
+    expect(submitted.status).toBe(200);
+    expect((await repeated.json()).data).toEqual(result);
+    expect(result).toMatchObject({ attemptId, kind: 'batch', score: 50, total: 2 });
+    expect(result.answers.map((answer: { question: string }) => answer.question)).toEqual(['循环', '函数']);
+    expect((await submit({ ...body, answers: { '1': '错误', '2': '复用' } })).status).toBe(409);
+    const after = await today();
+    expect(after.completedToday).toBe(before.completedToday + 1);
+    expect(after.total).toBe(before.total - 1);
+    expect(after.items).toContainEqual(expect.objectContaining({ ...refs[1], mistakeCount: 2, lastWrongAttemptId: attemptId }));
+    expect(after.items).not.toContainEqual(expect.objectContaining(refs[0]));
+    expect((await getReview(request('mobile/review?version=1&questionId=1'), {
+      params: Promise.resolve({ resourceId: refs[1].resourceId }),
+    })).status).toBe(200);
+    await prisma.resource.update({ where: { id: refs[1].resourceId }, data: { revision: { increment: 1 } } });
+    expect((await get()).status).toBe(409);
+    expect((await (await submit()).json()).data).toEqual(result);
+  });
+
+  it('uses the phone day boundary for practice statistics and isolates the other account', async () => {
+    const topic = '统计分组';
+    const today = localDay(new Date(), -480);
+    await prisma.learningQuizAttempt.createMany({ data: [
+      { userId: other, topic, question: '昨天', correct: true, createdAt: new Date(today.getTime() - 1) },
+      { userId: other, topic, question: '今天', correct: false, createdAt: today },
+    ] });
+    await prisma.learningSkillMastery.create({ data: { userId: other, topic, mastery: 0.2 } });
+    const response = await getMobileStats(request('mobile/stats?tzOffset=-480', 'GET', undefined, other));
+    expect(response.status).toBe(200);
+    const { data } = await response.json();
+    expect(data).toMatchObject({ days: 2, answered: 2, accuracy: 50, streak: 2, accuracyChange: null, weakTopics: [{ topic, mastery: 0.2 }] });
+    expect(data.daily.slice(-2).map((day: { answered: number; correct: number }) => [day.answered, day.correct])).toEqual([[1, 1], [1, 0]]);
+    const ownerStats = await getMobileStats(request('mobile/stats?tzOffset=-480'));
+    expect((await ownerStats.json()).data.weakTopics).not.toContainEqual(expect.objectContaining({ topic }));
+  });
+
+  it('saves mobile resources after the app disconnects from generation', async () => {
+    const nodeId = 'disconnect-node';
+    mocks.plan.mockResolvedValueOnce({ currentNode: {
+      id: nodeId, title: '后台生成', knowledgePoints: ['缓存'], resources: [], prerequisites: [],
+      estimatedMinutes: 10, status: 'in_progress',
+    } });
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    mocks.generate.mockImplementation(async (type: string) => {
+      await pending;
+      return { title: type, content: type === 'quiz'
+        ? JSON.stringify([{ type: 'fill', question: '缓存是什么？', answer: '存储' }])
+        : '## 缓存' };
+    });
+    const controller = new AbortController();
+    const input = new NextRequest('http://localhost/api/v1/smartlearn', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-fixture-user': owner },
+      signal: controller.signal, body: JSON.stringify({ action: 'start', client: 'mobile', goal: '学习缓存' }),
+    });
+    const response = await startPath(input);
+    const reader = response.body!.getReader();
+    let sessionId: string;
+    try {
+      const first = await reader.read();
+      sessionId = JSON.parse(new TextDecoder().decode(first.value).split('\n')[0].slice(6)).sessionId;
+      const status = await getPath(request('smartlearn?sessionId=' + sessionId));
+      expect((await status.json()).data.generating).toBe(true);
+      controller.abort();
+      await reader.cancel();
+    } finally {
+      release();
+    }
+    await expect.poll(async () => {
+      const response = await getPath(request('smartlearn?sessionId=' + sessionId));
+      const { data } = await response.json();
+      return { generating: data.generating, types: data.path?.nodes[0]?.resources.map((item: { type: string }) => item.type).sort() };
+    }).toEqual({ generating: false, types: expect.arrayContaining(['document', 'quiz']) });
   });
 });

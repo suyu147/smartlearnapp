@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { Linking, Text, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { apiUrl } from './api';
 import { resourceLabels, type Resource } from './types';
-import { Button, Card, Heading, Notice, Section, styles } from './ui';
+import { Button, Card, Heading, Notice, Section, color, styles } from './ui';
 import MarkdownContent, { CodeContent } from './MarkdownContent';
 import MindmapView from './MindmapView';
 
@@ -24,6 +24,7 @@ function readDocument(resource: Resource): NonNullable<Resource['metadata']>['st
 export default function ResourceView({ resource, token, onRead }: { resource: Resource; token: string; onRead?: () => void }) {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [visibleSections, setVisibleSections] = useState(8);
   const metadata = resource.metadata;
   const doc = resource.type === 'document' ? readDocument(resource) : undefined;
   const reading = metadata?.structuredReading;
@@ -60,18 +61,26 @@ export default function ResourceView({ resource, token, onRead }: { resource: Re
     {resource.type === 'ppt' ? <Button label={busy ? '下载中…' : '下载并打开 PPTX'} disabled={busy} action={() => void download()} /> : null}
     {resource.type === 'document' && doc ? <>
       {doc.introduction ? <MarkdownContent content={doc.introduction} /> : null}
-      {doc.sections.map(section => <Card key={section.id}>
+      {doc.sections.slice(0, visibleSections).map(section => <Card key={section.id}>
         <Section>{section.title}</Section>
         {section.blocks.map((block, index) => <View key={index}>
           {block.title ? <Text style={styles.rowTitle}>{block.title}</Text> : null}
-          {block.type === 'table' ? [block.headers ?? [], ...(block.rows ?? [])].map((row, rowIndex) =>
-            <Text key={rowIndex} style={styles.body}>{row.join('  ·  ')}</Text>) :
+          {block.type === 'table' ? <ScrollView horizontal nestedScrollEnabled>
+            <View style={table.grid}>
+              {[block.headers ?? [], ...(block.rows ?? [])].map((row, rowIndex) =>
+                <View key={rowIndex} style={[table.row, rowIndex === 0 && table.header]}>
+                  {row.map((cell, index) => <View key={index} style={table.cell}><MarkdownContent content={cell} /></View>)}
+                </View>)}
+            </View>
+          </ScrollView> :
             block.content ? (block.type === 'code' && !/^\s*(?:\x60{3}|~{3})/.test(block.content)
               ? <CodeContent content={block.content} />
               : <MarkdownContent content={block.content} unwrap={block.type !== 'code'} />) : null}
         </View>)}
       </Card>)}
-      {doc.summary ? <MarkdownContent content={doc.summary} /> : null}
+      {doc.sections.length > visibleSections ?
+        <Button label="继续阅读" action={() => setVisibleSections(value => value + 8)} /> :
+        doc.summary ? <MarkdownContent content={doc.summary} /> : null}
     </> : null}
     {resource.type === 'video' ? <>
       {videos?.length ? videos.map(video => <Card key={video.id}>
@@ -98,3 +107,10 @@ export default function ResourceView({ resource, token, onRead }: { resource: Re
     {onRead ? <Button label="标记已读并返回" action={onRead} /> : null}
   </>;
 }
+
+const table = StyleSheet.create({
+  grid: { borderColor: color.line, borderTopWidth: 1, borderLeftWidth: 1 },
+  row: { flexDirection: 'row' },
+  header: { backgroundColor: color.tint },
+  cell: { width: 142, padding: 8, borderColor: color.line, borderBottomWidth: 1, borderRightWidth: 1 },
+});

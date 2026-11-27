@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { api, ApiError } from './api';
-import type { ReviewItem, ReviewList, ReviewMode } from './types';
+import { ApiError } from './api';
+import { getLearning } from './learning-storage';
+import type { ReviewBatch, ReviewItem, ReviewList, ReviewMode } from './types';
 import { Button, Card, Heading, Notice, Row, Section, color, styles } from './ui';
 
-export default function ReviewView({ token, mode, compact = false, onStart, onOpen, onReport, onAuthError }: {
-  token: string; mode: ReviewMode; compact?: boolean;
+export default function ReviewView({ accountId, token, mode, initialTopic, syncRevision, compact = false, onStart, onBatch, onOpen, onReport, onAuthError }: {
+  accountId: string; token: string; mode: ReviewMode; compact?: boolean; initialTopic?: string; syncRevision: number;
   onStart: (item: ReviewItem) => void; onOpen?: () => void;
+  onBatch: (batch: ReviewBatch) => void;
   onReport: (item: ReviewItem) => void; onAuthError: () => void;
 }) {
-  const [topic, setTopic] = useState<string>();
+  const [topic, setTopic] = useState(initialTopic);
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<ReviewList>();
   const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [offline, setOffline] = useState(false);
   const today = mode === 'today';
   const title = today ? '今日待复习' : '错题本';
 
@@ -24,8 +27,9 @@ export default function ReviewView({ token, mode, compact = false, onStart, onOp
     if (topic) query.set('topic', topic);
     setLoading(true);
     setError('');
-    void api<ReviewList>('/mobile/review?' + query.toString(), token, undefined, request.signal).then(result => {
+    void getLearning<ReviewList>(accountId, '/mobile/review?' + query.toString(), token, request.signal).then(({ data: result, offline }) => {
       if (request.signal.aborted) return;
+      setOffline(offline);
       setData(previous => !offset || !previous ? result : {
         ...result, items: [...previous.items, ...result.items.filter(item => !previous.items.some(existing =>
           existing.resourceId === item.resourceId && existing.version === item.version && existing.questionId === item.questionId))],
@@ -36,7 +40,7 @@ export default function ReviewView({ token, mode, compact = false, onStart, onOp
       else setError(cause instanceof Error ? cause.message : '无法读取复习记录');
     }).finally(() => { if (!request.signal.aborted) setLoading(false); });
     return () => request.abort();
-  }, [mode, offset, topic, token, retry, onAuthError]);
+  }, [accountId, mode, offset, topic, token, retry, syncRevision, onAuthError]);
 
   function selectTopic(value?: string) {
     if (topic === value) return;
@@ -47,33 +51,43 @@ export default function ReviewView({ token, mode, compact = false, onStart, onOp
   }
 
   const status = <>
+    {offline ? <Text style={styles.detail}>本机缓存，联网后更新</Text> : null}
     {loading ? <Notice text="正在读取复习记录" busy /> : null}
     {error ? <><Notice text={error} error /><Button label="重试" secondary action={() => setRetry(value => value + 1)} /></> : null}
   </>;
+  const refs = data?.batch;
+  const batchButton = refs?.length ? <Button label={today ? `开始复习 · ${refs.length} 题` : `整组重练 · ${refs.length} 题`}
+    disabled={loading} action={() => onBatch({ refs, mode, topic })} /> : null;
 
   if (compact) {
-    const first = data?.items[0];
+    const done = data?.completedToday ?? 0;
+    const remaining = data?.total ?? 0;
     return <Card>
       <Section>{title}</Section>
       {status}
-      {first ? <>
-        <Text style={styles.detail}>{data?.total} 道题 · 先复习 {first.topic}</Text>
-        <Button label="开始复习" action={() => onStart(first)} />
-        <Button label="查看复习列表" secondary action={() => onOpen?.()} />
-      </> : data && !loading ? <Text style={styles.detail}>今天暂无待复习的题目。</Text> : null}
+      {data ? <>
+        <Text style={styles.detail}>已完成 {done} 题 · 剩余 {remaining} 题</Text>
+        {done + remaining > 0 ? <View accessibilityRole="progressbar"
+          accessibilityValue={{ min: 0, max: done + remaining, now: done }} style={local.track}>
+          <View style={[local.fill, { width: `${100 * done / (done + remaining)}%` }]} />
+        </View> : null}
+        {batchButton}
+        {remaining ? <Button label="查看复习列表" secondary action={() => onOpen?.()} /> : null}
+      </> : null}
     </Card>;
   }
 
   return <>
     <Heading title={title} detail={data && !loading ? `${data.total} 道题` : undefined} />
-    {data?.topics.length ? <View style={local.filters}>
-      {[undefined, ...data.topics].map(value => <Pressable key={value === undefined ? 'all' : 'topic:' + value}
+    {data && (data.topics.length || topic) ? <View style={local.filters}>
+      {[undefined, ...new Set([...data.topics, ...(topic ? [topic] : [])])].map(value => <Pressable key={value === undefined ? 'all' : 'topic:' + value}
         accessibilityRole="button" accessibilityState={{ selected: value === topic }} onPress={() => selectTopic(value)}
         style={[local.filter, value === topic && local.selected]}>
         <Text style={local.filterText}>{value ?? '全部知识点'}</Text>
       </Pressable>)}
     </View> : null}
     {status}
+    {batchButton}
     {data?.items.map(item => <Card key={`${item.resourceId}:${item.version}:${item.questionId}`}>
       <Text style={styles.detail}>{item.topic} · {item.title}</Text>
       <Text style={styles.rowTitle}>{item.question}</Text>
@@ -90,6 +104,8 @@ export default function ReviewView({ token, mode, compact = false, onStart, onOp
 }
 
 const local = StyleSheet.create({
+  track: { height: 7, backgroundColor: color.tint, borderRadius: 8, overflow: 'hidden' },
+  fill: { height: '100%', backgroundColor: color.blue, borderRadius: 8 },
   filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   filter: { borderRadius: 18, borderWidth: 1, borderColor: color.line, backgroundColor: color.white, paddingHorizontal: 12, paddingVertical: 9, minHeight: 44, justifyContent: 'center', maxWidth: '100%' },
   selected: { borderColor: color.blue, backgroundColor: color.tint },

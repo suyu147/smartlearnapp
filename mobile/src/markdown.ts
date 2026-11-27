@@ -1,6 +1,10 @@
 import MarkdownIt from 'markdown-it';
+import { addMath } from './markdown-math';
 
 export const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true });
+export const mathMarkdown = new MarkdownIt({ html: false, breaks: true, linkify: true }).use(addMath);
+// Keep formula-rich documents readable offline and avoid fetching remote media in the embedded renderer.
+mathMarkdown.renderer.rules.image = (tokens, index) => mathMarkdown.utils.escapeHtml(tokens[index].content);
 
 export function normalizeMarkdown(source: string, unwrap = false) {
   const lines = source.replace(/\r\n?/g, '\n').split('\n');

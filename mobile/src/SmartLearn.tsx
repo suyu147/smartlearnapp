@@ -3,17 +3,29 @@ import Feather from '@expo/vector-icons/Feather';
 import * as SecureStore from 'expo-secure-store';
 import { AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ApiError, api } from './api';
-import { type Account, type LearningPath, type Node, type PathSummary, type Resource, type ResourceType, type Resume, type ReviewItem, type ReviewMode, type ReviewTarget, type Stats, resourceLabels } from './types';
+import { ApiError, api, apiUrl, isTemporaryError } from './api';
+import { type Account, type LearningPath, type Node, type PathSummary, type Resource, type ResourceType, type Resume, type ReviewBatch, type ReviewItem, type ReviewMode, type ReviewTarget, type Stats, resourceLabels } from './types';
 import { Button, Card, Field, Heading, Notice, Page, Row, Section, color, styles } from './ui';
 import ResourceView from './ResourceView';
 import PracticeView from './PracticeView';
 import ReviewView from './ReviewView';
+import LearningStatsView from './LearningStatsView';
 import ChatView from './ChatView';
-import { documentProgress, readDraft } from './learning-storage';
+import { documentProgress, flushSubmissions, getLearning, readBatch, readDraft, saveBatch, saveDraft } from './learning-storage';
 import { usePathGeneration, type Generation } from './usePathGeneration';
 
 const tokenKey = 'smartlearn.account.token';
+const accountKey = 'smartlearn.account.snapshot';
+type Auth = { token: string; account: Account; hasProfile: boolean };
+type SavedAccount = Omit<Auth, 'token'> & { server: string };
+
+async function storeAccount(auth: Auth) {
+  const previous = await SecureStore.getItemAsync(tokenKey);
+  if (previous !== auth.token) await SecureStore.deleteItemAsync(accountKey);
+  await SecureStore.setItemAsync(tokenKey, auth.token);
+  const snapshot: SavedAccount = { account: auth.account, hasProfile: auth.hasProfile, server: apiUrl('/') };
+  await SecureStore.setItemAsync(accountKey, JSON.stringify(snapshot)).catch(() => {});
+}
 const tabs = [
   { id: 'home', title: '首页', icon: 'home' },
   { id: 'learn', title: '学习', icon: 'book-open' },
@@ -26,8 +38,9 @@ type Screen =
   | { type: 'main' }
   | { type: 'path'; sessionId: string }
   | { type: 'resource'; resource: Resource }
-  | { type: 'practice'; resourceId: string; reportId?: string; review?: ReviewTarget }
-  | { type: 'review'; mode: ReviewMode };
+  | { type: 'practice'; resourceId?: string; reportId?: string; review?: ReviewTarget; batch?: ReviewBatch }
+  | { type: 'review'; mode: ReviewMode; topic?: string }
+  | { type: 'stats' };
 
 const resourceIcons = {
   document: 'file-text', mindmap: 'share-2', quiz: 'check-square', video: 'play-circle',
@@ -54,7 +67,7 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, account: Account, ha
       const result = await api<{ token: string; user: Account }>(register ? '/auth/register' : '/auth/login', undefined, { username: username.trim(), password });
       const auth = await api<{ user: Account | null; hasProfile: boolean }>('/auth/status', result.token);
       if (!auth.user) throw new Error('无法验证登录状态');
-      await SecureStore.setItemAsync(tokenKey, result.token);
+      await storeAccount({ token: result.token, account: auth.user, hasProfile: auth.hasProfile });
       onLogin(result.token, auth.user, auth.hasProfile);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '登录失败');
@@ -85,7 +98,7 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, account: Account, ha
 function PathCard({ item, open }: { item: PathSummary; open: () => void }) {
   return <Card><Row title={item.goal} detail={item.currentNode?.title ?? (item.status === 'pending' ? '继续生成第一节' : '查看课节')}
     icon="book-open" onPress={open} />
-    <Text style={styles.detail}>已完成 {item.completedCount} 节</Text>
+    <Text style={styles.detail}>已完成 {item.completedCount} 节{item.nodeCount > 0 ? ` · 已生成 ${item.nodeCount} 节` : ''}</Text>
   </Card>;
 }
 
@@ -93,8 +106,8 @@ function ResourceRow({ resource, open }: { resource: Resource; open: () => void 
   return <Row title={resource.title} detail={resourceLabels[resource.type]} icon={resourceIcons[resource.type]} onPress={open} />;
 }
 
-function PathView({ sessionId, token, generation, anotherPathRunning, run, onResource, onChat, onAuthError, onPractice }: {
-  sessionId: string; token: string; generation?: Generation; run: ReturnType<typeof usePathGeneration>['run'];
+function PathView({ sessionId, accountId, token, generation, anotherPathRunning, run, onResource, onChat, onAuthError, onPractice }: {
+  sessionId: string; accountId: string; token: string; generation?: Generation; run: ReturnType<typeof usePathGeneration>['run'];
   anotherPathRunning: boolean;
   onResource: (resource: Resource) => void; onChat: (node: Node) => void; onAuthError: () => void;
   onPractice: (resourceId: string, reportId?: string) => void;
@@ -106,8 +119,10 @@ function PathView({ sessionId, token, generation, anotherPathRunning, run, onRes
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [reload, setReload] = useState(0);
+  const [offline, setOffline] = useState(false);
+  const [remoteRunning, setRemoteRunning] = useState(false);
   const busy = !!generation?.running;
-  const generationDisabled = busy || anotherPathRunning;
+  const generationDisabled = busy || remoteRunning || anotherPathRunning;
   const streamedPath = generation?.path;
   const path = streamedPath && (!savedPath || (streamedPath.revision ?? 0) > (savedPath.revision ?? 0)) ? streamedPath : savedPath;
   const node = path?.nodes.find(item => item.id === selectedNode) ??
@@ -129,35 +144,39 @@ function PathView({ sessionId, token, generation, anotherPathRunning, run, onRes
       const request = new AbortController();
       active = request;
       const encoded = encodeURIComponent(sessionId);
-      try {
-        const [detail, assets] = await Promise.all([
-          api<{ path: LearningPath | null }>('/smartlearn?sessionId=' + encoded, token, undefined, request.signal),
-          api<{ resources: Resource[] }>('/mobile/resources?sessionId=' + encoded, token, undefined, request.signal),
-        ]);
-        if (request.signal.aborted) return;
-        setSavedPath(detail.path);
-        setResources(assets.resources);
+      const [detail, assets] = await Promise.allSettled([
+        getLearning<{ path: LearningPath | null; generating?: boolean }>(accountId, '/smartlearn?sessionId=' + encoded, token, request.signal),
+        getLearning<{ resources: Resource[] }>(accountId, '/mobile/resources?sessionId=' + encoded, token, request.signal),
+      ]);
+      if (request.signal.aborted) return;
+      setError('');
+      if (detail.status === 'fulfilled') {
+        setSavedPath(previous => detail.value.offline && previous &&
+          (previous.revision ?? 0) > (detail.value.data.path?.revision ?? 0) ? previous : detail.value.data.path);
         setLoaded(true);
-        setError('');
-      } catch (cause) {
-        if (!request.signal.aborted) fail(cause);
+        if (!detail.value.offline) setRemoteRunning(!!detail.value.data.generating);
       }
+      else fail(detail.reason);
+      if (assets.status === 'fulfilled') setResources(assets.value.data.resources);
+      else fail(assets.reason);
+      setOffline((detail.status === 'fulfilled' && detail.value.offline) || (assets.status === 'fulfilled' && assets.value.offline));
     };
     void load();
+    const timer = remoteRunning && !busy ? setInterval(() => { if (AppState.currentState === 'active') void load(); }, 6000) : undefined;
     const foreground = AppState.addEventListener('change', state => { if (state === 'active') void load(); });
-    return () => { active?.abort(); foreground.remove(); };
-  }, [sessionId, token, fail, busy, reload]);
+    return () => { active?.abort(); clearInterval(timer); foreground.remove(); };
+  }, [sessionId, accountId, token, fail, busy, remoteRunning, reload]);
 
   useEffect(() => {
     if (!quizId) return;
     const request = new AbortController();
-    api<{ latestAttemptId: string | null }>('/mobile/practice/' + encodeURIComponent(quizId), token, undefined, request.signal)
-      .then(result => {
+    getLearning<{ latestAttemptId: string | null }>(accountId, '/mobile/practice/' + encodeURIComponent(quizId), token, request.signal)
+      .then(({ data: result }) => {
         if (!request.signal.aborted) setLastReport(result.latestAttemptId ? { quizId, attemptId: result.latestAttemptId } : undefined);
       })
       .catch(cause => { if (!request.signal.aborted) fail(cause); });
     return () => request.abort();
-  }, [quizId, token, fail, reload]);
+  }, [quizId, accountId, token, fail, reload]);
 
   function generate(type?: ResourceType, advance = false) {
     setError('');
@@ -187,10 +206,12 @@ function PathView({ sessionId, token, generation, anotherPathRunning, run, onRes
   const extras = [...types].filter(type => type !== 'document' && type !== 'quiz');
   return <>
     <Heading title={path?.goal ?? '学习路径'} />
+    {offline ? <Notice text="正在查看本机缓存的课节和资源" /> : null}
     {generation?.error ? <Notice text={generation.error} error /> : null}
     {error ? <Notice text={error} error /> : null}
     {(error || generation?.error) && !busy ? <Button label="刷新课节" secondary action={() => setReload(value => value + 1)} /> : null}
-    {busy ? <Notice text={generation.stage} busy /> : !loaded && !error ? <Notice text="正在读取学习路径" busy /> : null}
+    {busy ? <Notice text={generation.stage} busy /> : remoteRunning ? <Notice text="服务器正在生成课节，已完成的资源会自动刷新" busy />
+      : !loaded && !error ? <Notice text="正在读取学习路径" busy /> : null}
     {anotherPathRunning ? <Notice text="另一条学习路径正在生成，可先阅读本课节已完成的内容。" /> : null}
     {loaded && !node && !busy ? <Button label="生成第一节" disabled={generationDisabled} action={() => generate()} /> : null}
     {node ? <>
@@ -215,7 +236,7 @@ function PathView({ sessionId, token, generation, anotherPathRunning, run, onRes
 
 
 export default function SmartLearn() {
-  const [auth, setAuth] = useState<{ token: string; account: Account; hasProfile: boolean } | null>(null);
+  const [auth, setAuth] = useState<Auth | null>(null);
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState('');
   const [tab, setTab] = useState<Tab>('home');
@@ -231,12 +252,18 @@ export default function SmartLearn() {
   const [resourceFilter, setResourceFilter] = useState<ResourceType | 'all'>('all');
   const [chatNode, setChatNode] = useState<Node>();
   const [loading, setLoading] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [syncRevision, setSyncRevision] = useState(0);
+  const [savedBatch, setSavedBatch] = useState<ReviewBatch>();
   const resumeRequest = useRef<AbortController | null>(null);
+  const mainRequest = useRef<AbortController | null>(null);
   const screen = screens[screens.length - 1];
   const token = auth?.token;
+  const accountId = auth?.account.id;
 
   const logout = useCallback(() => {
     resumeRequest.current?.abort();
+    mainRequest.current?.abort();
     setAuth(null);
     setTab('home');
     setScreens([{ type: 'main' }]);
@@ -250,7 +277,10 @@ export default function SmartLearn() {
     setResourceFilter('all');
     setError('');
     setOpeningResume(false);
+    setOffline(false);
+    setSavedBatch(undefined);
     void SecureStore.deleteItemAsync(tokenKey).catch(() => {});
+    void SecureStore.deleteItemAsync(accountKey).catch(() => {});
   }, []);
   const { generation, reset, run } = usePathGeneration(token, logout);
   useEffect(() => { if (!token) reset(); }, [token, reset]);
@@ -259,40 +289,87 @@ export default function SmartLearn() {
   const restore = useCallback(async (signal?: AbortSignal) => {
     setBooting(true);
     setBootError('');
+    let saved: string | null = null;
     try {
-      const saved = await SecureStore.getItemAsync(tokenKey);
+      saved = await SecureStore.getItemAsync(tokenKey);
       if (!saved) return;
       const status = await api<{ mode: string; user: Account | null; hasProfile: boolean }>('/auth/status', saved, undefined, signal);
       if (signal?.aborted) return;
-      if (status.mode === 'multi' && status.user) setAuth({ token: saved, account: status.user, hasProfile: status.hasProfile });
-      else await SecureStore.deleteItemAsync(tokenKey);
+      if (status.mode === 'multi' && status.user) {
+        const current = { token: saved, account: status.user, hasProfile: status.hasProfile };
+        await storeAccount(current);
+        if (!signal?.aborted) setAuth(current);
+      } else logout();
     } catch (cause) {
+      if (signal?.aborted) return;
+      if (cause instanceof ApiError && cause.status === 401) { logout(); return; }
+      if (saved && isTemporaryError(cause)) {
+        const snapshot = await SecureStore.getItemAsync(accountKey).catch(() => null);
+        let previous: SavedAccount | undefined;
+        try { if (snapshot) previous = JSON.parse(snapshot); } catch { /* Restore requires a valid account snapshot. */ }
+        if (!signal?.aborted && previous?.server === apiUrl('/') && previous.account?.id) {
+          setAuth({ token: saved, account: previous.account, hasProfile: previous.hasProfile });
+          setOffline(true);
+          return;
+        }
+      }
       if (!signal?.aborted) setBootError(cause instanceof Error ? cause.message : '无法恢复登录');
     } finally {
       if (!signal?.aborted) setBooting(false);
     }
-  }, []);
+  }, [logout]);
   useEffect(() => {
     const request = new AbortController();
     void restore(request.signal);
     return () => request.abort();
   }, [restore]);
 
-  const refresh = useCallback(async (signal?: AbortSignal, offset = 0) => {
-    if (!token) return;
+  useEffect(() => {
+    if (!accountId || !token) return;
+    const controller = new AbortController();
+    let running = false;
+    const sync = async () => {
+      if (running || controller.signal.aborted || AppState.currentState !== 'active') return;
+      running = true;
+      try {
+        await flushSubmissions(accountId, token, controller.signal, () => setSyncRevision(value => value + 1));
+      } catch (cause) {
+        if (!controller.signal.aborted && cause instanceof ApiError && cause.status === 401) logout();
+      } finally {
+        running = false;
+      }
+    };
+    setSavedBatch(readBatch(accountId));
+    void sync();
+    const timer = setInterval(() => void sync(), 8000);
+    const foreground = AppState.addEventListener('change', state => { if (state === 'active') void sync(); });
+    return () => { controller.abort(); clearInterval(timer); foreground.remove(); };
+  }, [accountId, token, logout]);
+
+  const refresh = useCallback(async (offset = 0) => {
+    if (!token || !accountId) return;
+    mainRequest.current?.abort();
+    const request = new AbortController();
+    mainRequest.current = request;
+    const signal = request.signal;
     setLoading(true);
     try {
       if (tab === 'resources') {
-        const data = await api<{ resources: Resource[] }>('/mobile/resources', token, undefined, signal);
+        const { data, offline: cached } = await getLearning<{ resources: Resource[] }>(accountId, '/mobile/resources', token, signal);
+        if (signal.aborted) return;
+        setOffline(cached);
         setResources(data.resources);
       } else if (tab !== 'chat') {
         const query = '/mobile/learning-paths?offset=' + offset + (tab === 'home' ? '&resume=1' : '');
-        const data = await api<{ items: PathSummary[]; nextOffset: number | null; resume?: Resume | null }>(query, token, undefined, signal);
+        const { data, offline: cached } = await getLearning<{ items: PathSummary[]; nextOffset: number | null; resume?: Resume | null }>(accountId, query, token, signal);
         if (signal?.aborted) return;
+        setOffline(cached);
         setItems(current => offset ? [...current, ...data.items.filter(item => !current.some(existing => existing.sessionId === item.sessionId))] : data.items);
         setNextOffset(data.nextOffset);
         if (tab === 'home') setResume(data.resume ?? null);
-        if (tab !== 'learn') await api<Stats>('/stats/learning', token, undefined, signal).then(setStats).catch(cause => {
+        if (tab === 'profile') await getLearning<Stats>(accountId, '/stats/learning', token, signal).then(result => {
+          if (!signal.aborted) setStats(result.data);
+        }).catch(cause => {
           if (cause instanceof ApiError && cause.status === 401) throw cause;
         });
       }
@@ -304,16 +381,16 @@ export default function SmartLearn() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [tab, token, logout]);
+  }, [tab, token, accountId, logout]);
   useEffect(() => {
     if (screen.type !== 'main') return;
-    const request = new AbortController();
-    void refresh(request.signal);
+    void refresh();
+    if (accountId) setSavedBatch(readBatch(accountId));
     const foreground = AppState.addEventListener('change', state => {
-      if (state === 'active') void refresh(request.signal);
+      if (state === 'active') void refresh();
     });
-    return () => { request.abort(); foreground.remove(); };
-  }, [screen.type, refresh, generation?.running]);
+    return () => { mainRequest.current?.abort(); foreground.remove(); };
+  }, [screen.type, refresh, generation?.running, accountId]);
 
   const open = (value: Screen) => setScreens(previous => [...previous, value]);
   const back = () => { setScreens(previous => previous.length > 1 ? previous.slice(0, -1) : previous); setError(''); };
@@ -346,6 +423,17 @@ export default function SmartLearn() {
   const startReview = ({ resourceId, questionId, version }: ReviewItem) => open({
     type: 'practice', resourceId, review: { questionId, version },
   });
+  const startBatch = (batch: ReviewBatch) => {
+    if (!accountId) return;
+    const existing = readBatch(accountId);
+    if (existing) { open({ type: 'practice', batch: existing }); return; }
+    try {
+      saveDraft(accountId, 'review-batch');
+      saveBatch(accountId, batch);
+      setSavedBatch(batch);
+    } catch { /* The batch is still usable while this screen is open. */ }
+    open({ type: 'practice', batch });
+  };
   const openWrongReport = (item: ReviewItem) => openPractice(item.resourceId, item.lastWrongAttemptId);
   const openResource = (resource: Resource) => {
     if (resource.type === 'quiz') return openPractice(resource.id);
@@ -382,12 +470,13 @@ export default function SmartLearn() {
     setOpeningResume(true);
     setError('');
     try {
-      const data = await api<{ resources: Resource[] }>('/mobile/resources?sessionId=' + encodeURIComponent(recent.sessionId), auth.token, undefined, request.signal);
+      const { data, offline: cached } = await getLearning<{ resources: Resource[] }>(auth.account.id, '/mobile/resources?sessionId=' + encodeURIComponent(recent.sessionId), auth.token, request.signal);
       if (request.signal.aborted) return;
       const resource = data.resources.find(item => item.id === document.id);
       if (resource) {
         documentProgress(auth.account.id, resource.id, 'opened');
         setScreens([...baseScreens, { type: 'resource', resource }]);
+        setOffline(cached);
       } else setScreens(baseScreens);
     } catch (cause) {
       if (request.signal.aborted) return;
@@ -414,7 +503,7 @@ export default function SmartLearn() {
           {screen.type === 'main' && tab === 'chat' ?
             <ChatView token={auth.token} node={chatNode} onClearNode={() => setChatNode(undefined)} onAuthError={logout} /> :
             <Page key={screen.type + ':' + screens.length}>
-              {screen.type === 'path' ? <PathView key={screen.sessionId} sessionId={screen.sessionId} token={auth.token} onResource={openResource}
+              {screen.type === 'path' ? <PathView key={screen.sessionId} sessionId={screen.sessionId} accountId={auth.account.id} token={auth.token} onResource={openResource}
                 generation={generation?.sessionId === screen.sessionId ? generation : undefined} run={run}
                 anotherPathRunning={!!generation?.running && generation.sessionId !== screen.sessionId}
                 onPractice={openPractice} onAuthError={logout} onChat={node => { switchTab('chat'); setChatNode(node); }} /> : null}
@@ -425,6 +514,13 @@ export default function SmartLearn() {
                 } : undefined} /> : null}
               {screen.type === 'practice' ? <PracticeView key={screen.resourceId} resourceId={screen.resourceId} accountId={auth.account.id}
                 reportId={screen.reportId} review={screen.review} token={auth.token} onBack={back} onAuthError={logout}
+                batch={screen.batch} syncRevision={syncRevision} onNextBatch={({ mode, topic }) => {
+                  setScreens(previous => {
+                    const parent = previous.at(-2);
+                    return parent?.type === 'review' && parent.mode === mode && parent.topic === topic ? previous.slice(0, -1)
+                    : [...previous.slice(0, -1), { type: 'review', mode, topic }];
+                  });
+                }}
                 onReview={report => {
                   // Keep the source report on the navigation stack when leaving a retry.
                   setScreens(previous => [
@@ -434,10 +530,17 @@ export default function SmartLearn() {
                   ]);
                 }}
                 onPractice={resourceId => openPractice(resourceId)} /> : null}
-              {screen.type === 'review' ? <ReviewView mode={screen.mode} token={auth.token} onStart={startReview}
+              {screen.type === 'review' ? <ReviewView mode={screen.mode} initialTopic={screen.topic} accountId={auth.account.id} token={auth.token}
+                syncRevision={syncRevision} onStart={startReview} onBatch={startBatch}
                 onReport={openWrongReport} onAuthError={logout} /> : null}
+              {screen.type === 'stats' ? <>
+                <Heading title="学习统计" />
+                <LearningStatsView accountId={auth.account.id} token={auth.token} syncRevision={syncRevision} onAuthError={logout}
+                  onTopic={topic => open({ type: 'review', mode: 'mistakes', topic })} />
+              </> : null}
               {screen.type === 'main' ? <>
                 {error ? <Notice text={error} error /> : null}
+                {offline ? <Notice text="部分学习内容来自本机缓存" /> : null}
                 {loading ? <Notice text="正在读取学习记录" busy /> : null}
                 {tab === 'home' ? <>
                   <Heading title={'你好，' + auth.account.username} detail={dateLabel()} />
@@ -449,14 +552,11 @@ export default function SmartLearn() {
                       <Text style={local.heroActionText}>{openingResume ? '正在打开…' : resumeLabel}</Text><Feather name="arrow-right" size={17} color={color.blueDark} />
                     </Pressable>
                   </View>
-                  <ReviewView mode="today" compact token={auth.token} onStart={startReview}
+                  {savedBatch ? <Button label="继续上一组复习" action={() => startBatch(savedBatch)} /> : null}
+                  <ReviewView mode="today" compact accountId={auth.account.id} token={auth.token} syncRevision={syncRevision} onStart={startReview} onBatch={startBatch}
                     onOpen={() => open({ type: 'review', mode: 'today' })} onReport={openWrongReport} onAuthError={logout} />
-                  <Section>学习概览</Section>
-                  {stats ? <Card><View style={local.statRow}>
-                    <Stat value={String(stats.answered)} label="已答题数" />
-                    <Stat value={stats.accuracy + '%'} label="练习正确率" />
-                    <Stat value={String(stats.days)} label="累计学习天数" />
-                  </View></Card> : <Text style={styles.detail}>学习记录同步后会显示在这里。</Text>}
+                  <LearningStatsView compact accountId={auth.account.id} token={auth.token} syncRevision={syncRevision}
+                    onAuthError={logout} onOpen={() => open({ type: 'stats' })} />
                   <Section>最近学习</Section>
                   {items.slice(0, 3).map(item => <PathCard key={item.sessionId} item={item} open={() => openPath(item.sessionId)} />)}
                   {!items.length && !loading ? <Text style={styles.detail}>暂无学习路径</Text> : null}
@@ -476,7 +576,7 @@ export default function SmartLearn() {
                   <Section>学习路径</Section>
                   {items.map(item => <PathCard key={item.sessionId} item={item} open={() => openPath(item.sessionId)} />)}
                   {!items.length && !loading ? <Text style={styles.detail}>暂无学习路径</Text> : null}
-                  {nextOffset !== null ? <Button label="加载更多" secondary disabled={loading} action={() => void refresh(undefined, nextOffset)} /> : null}
+                  {nextOffset !== null ? <Button label="加载更多" secondary disabled={loading} action={() => void refresh(nextOffset)} /> : null}
                 </> : null}
                 {tab === 'resources' ? <>
                   <Heading title="资源库" detail="来自学习路径的资源可在网页资源库查看。" />

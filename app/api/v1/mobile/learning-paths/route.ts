@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
         sessionId: session.id, goal: session.title, updatedAt: session.updatedAt, status: path?.status ?? 'pending',
         currentNode: current ? { id: current.id, title: current.title } : null,
         completedCount: nodes.filter(node => node.status === 'completed').length,
+        nodeCount: nodes.length,
       };
     });
     const recent = items[0];

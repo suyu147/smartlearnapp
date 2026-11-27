@@ -15,7 +15,8 @@ export function apiUrl(path: string) {
 }
 
 async function request(path: string, token?: string, body?: unknown, signal?: AbortSignal) {
-  const response = await fetch(apiUrl(path), {
+  const url = apiUrl(path);
+  const response = await fetch(url, {
     method: body === undefined ? 'GET' : 'POST',
     headers: {
       ...(token ? { Authorization: 'Bearer ' + token } : {}),
@@ -23,6 +24,9 @@ async function request(path: string, token?: string, body?: unknown, signal?: Ab
     },
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
+  }).catch(cause => {
+    if (signal?.aborted) throw cause;
+    throw new ApiError('无法连接学习服务器，请检查网络', 0);
   });
   if (!response.ok) {
     const details = await response.json().catch(() => null) as { error?: string } | null;
@@ -32,10 +36,30 @@ async function request(path: string, token?: string, body?: unknown, signal?: Ab
 }
 
 export async function api<T>(path: string, token?: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await request(path, token, body, signal);
-  const payload = await response.json();
-  return payload.success === true && 'data' in payload ? payload.data : payload;
+  const active = new AbortController();
+  const cancel = () => active.abort();
+  if (signal?.aborted) cancel();
+  signal?.addEventListener('abort', cancel);
+  const timeout = setTimeout(cancel, 15_000);
+  try {
+    const response = await request(path, token, body, active.signal);
+    const payload = await response.json();
+    return payload.success === true && 'data' in payload ? payload.data : payload;
+  } catch (cause) {
+    if (signal?.aborted || cause instanceof ApiError) throw cause;
+    if (active.signal.aborted || cause instanceof SyntaxError ||
+      (cause instanceof Error && cause.message.startsWith('fetch failed:'))) {
+      throw new ApiError('连接中断，请稍后重试', 0);
+    }
+    throw cause;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', cancel);
+  }
 }
+
+export const isTemporaryError = (cause: unknown) =>
+  cause instanceof ApiError && (cause.status === 0 || cause.status === 408 || cause.status === 429 || cause.status >= 500);
 
 export type StreamEvent = {
   type: string;

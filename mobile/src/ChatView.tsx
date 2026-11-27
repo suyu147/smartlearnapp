@@ -20,6 +20,7 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
   const [question, setQuestion] = useState('');
   const [pending, setPending] = useState('');
   const [draft, setDraft] = useState('');
+  const [interrupted, setInterrupted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -47,6 +48,7 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
       const page = await api<ChatPage>(messagePath(item.id, before), token, undefined, controller.signal);
       setChat(item);
       setMessages(previous => ({ ...page, messages: before ? [...page.messages, ...previous.messages] : page.messages }));
+      if (!before) { setPending(''); setDraft(''); setInterrupted(false); }
       setHistoryOpen(false);
     } catch (cause) {
       if (!controller.signal.aborted) fail(cause);
@@ -64,8 +66,10 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
     setBusy(true);
     setPending(input);
     setDraft('');
+    setInterrupted(false);
     setError('');
     let current = chat;
+    let finished = false;
     try {
       if (!current) {
         current = await api<Chat>('/sessions', token, { title: input.slice(0, 32) }, controller.signal);
@@ -82,20 +86,24 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
       await stream('/turns', token, { sessionId: current.id, message: context + input, conversationHistory, language: 'zh-CN' }, event => {
         if (event.type === 'content' && event.content) setDraft(previous => previous + event.content);
       }, controller.signal);
+      finished = true;
     } catch (cause) {
       if (!controller.signal.aborted) fail(cause);
     } finally {
-      if (current && !controller.signal.aborted) {
+      if (current && finished && !controller.signal.aborted) {
         try {
           const page = await api<ChatPage>(messagePath(current.id), token, undefined, controller.signal);
-          setMessages(page);
+          if (!controller.signal.aborted) {
+            setMessages(page);
+            setPending('');
+            setDraft('');
+          }
         } catch (cause) {
           if (!controller.signal.aborted) fail(cause);
         }
       }
       active.current = null;
-      setPending('');
-      setDraft('');
+      if (!finished || controller.signal.aborted) setInterrupted(true);
       setBusy(false);
     }
   }
@@ -120,6 +128,7 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
       }} style={local.icon}><Feather name="clock" size={21} color={color.blue} /></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="开始新对话" disabled={busy || loading} onPress={() => {
         setChat(undefined); setMessages(initialMessages); setQuestion(''); setError('');
+        setPending(''); setDraft(''); setInterrupted(false);
       }} style={local.icon}><Feather name="plus" size={22} color={color.blue} /></Pressable>
     </View>
     {node ? <Pressable accessibilityRole="button" accessibilityLabel="清除课节上下文" style={local.context} onPress={onClearNode}>
@@ -134,6 +143,7 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
       {conversation.map(message => <Bubble key={message.id} content={message.content} own={message.role === 'user'} />)}
       {pending ? <Bubble content={pending} own /> : null}
       {draft ? <Bubble content={draft} /> : null}
+      {interrupted && !busy && pending ? <Text style={styles.detail}>当前对话已保留在屏幕上，可从历史记录重新读取。</Text> : null}
       {busy && !draft ? <Text style={styles.detail}>正在思考…</Text> : null}
       {error ? <Notice text={error} error /> : null}
     </ScrollView>
@@ -148,7 +158,7 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
 
 const Bubble = memo(function Bubble({ content, own = false }: { content: string; own?: boolean }) {
   const formatted = useDeferredValue(content);
-  return <View style={[local.bubble, own && local.own]}>
+  return <View style={[local.bubble, own ? local.own : local.assistant]}>
     {own ? <Text selectable style={[styles.body, local.ownText]}>{content}</Text> : <MarkdownContent content={formatted} />}
   </View>;
 });
@@ -163,6 +173,7 @@ const local = StyleSheet.create({
   thread: { padding: 17, gap: 12 },
   bubble: { alignSelf: 'flex-start', maxWidth: '94%', borderWidth: 1, borderColor: color.line,
     backgroundColor: color.white, padding: 13, borderRadius: 17 },
+  assistant: { width: '94%' },
   own: { alignSelf: 'flex-end', backgroundColor: color.blue, borderColor: color.blue },
   ownText: { color: color.white },
   composer: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 13, paddingVertical: 8 },
