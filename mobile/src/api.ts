@@ -71,6 +71,7 @@ export type StreamEvent = {
     resourceType?: ResourceType;
     status?: 'running' | 'completed' | 'failed';
     message?: string;
+    node?: { id: string };
     resource?: Resource;
     practice?: Resource;
     path?: LearningPath;

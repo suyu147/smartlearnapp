@@ -21,8 +21,16 @@ import { localDay } from '@/lib/mobile/calendar';
 import { DEFAULT_DIMENSIONS } from '@/lib/types/profile';
 import type { StreamEvent } from '@/lib/deeptutor/core/types';
 import type { LearningPathNode } from '@/lib/types/learning-path';
+import { ALL_RESOURCE_TYPES } from '@/lib/types/resource';
 
-const mocks = vi.hoisted(() => ({ plan: vi.fn(), stages: vi.fn(), deck: vi.fn(), generate: vi.fn(), evaluate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  plan: vi.fn(), stages: vi.fn(), deck: vi.fn(), generate: vi.fn(), evaluate: vi.fn(),
+  after: [] as (() => Promise<void>)[],
+}));
+vi.mock('next/server', async original => ({
+  ...await original<typeof import('next/server')>(),
+  after: (work: () => Promise<void>) => { mocks.after.push(work); },
+}));
 vi.mock('@/lib/deeptutor/services/auth-middleware', () => ({
   withAuth: (req: Request, handler: (request: Request, ctx: { user: { id: string } }) => Promise<Response>) =>
     handler(req, { user: { id: req.headers.get('x-fixture-user')! } }),
@@ -244,7 +252,7 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
     expect(await prisma.learningSkillMastery.findUnique({ where: { userId_topic: { userId: owner, topic: '算法概览' } } })).toMatchObject({ reviewCount: 1 });
   });
 
-  it('plans mobile stages upfront, starts tasks out of order and preserves reports when replanning', async () => {
+  it('generates every resource for each newly unlocked stage’s first task and preserves started work when replanning', async () => {
     function task(id: string, stageId: string): LearningPathNode {
       return {
         id, title: id, stage: { id: stageId, title: stageId }, resources: [], knowledgePoints: [id],
@@ -260,46 +268,66 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
       title: type,
       content: type === 'quiz' ? JSON.stringify([{ type: 'fill', question: '写出数组第一个索引', answer: '0' }]) : '讲解',
     }));
-    mocks.deck.mockRejectedValue(new Error('Fixture optional PPT disabled'));
+    mocks.deck.mockResolvedValue({
+      format: 'standard_pptx_v1', title: '数据结构', topic: '数据结构', style: 'professional', language: 'zh-CN',
+      generatedAt: new Date().toISOString(), slides: [{ title: '数据结构', layout: 'title', bullets: [] }],
+    });
 
     const events = await streamed(await startPath(request('smartlearn', 'POST', {
       action: 'start', client: 'mobile', planMode: 'staged', goal: '理解数据结构',
     })));
     expect(eventNames(events)).toContain('path_update');
     expect(eventNames(events)).toContain('done');
-    expect(mocks.generate).not.toHaveBeenCalled();
     const sessionId = events[0].sessionId;
     const detail = async () => (await (await getPath(request('smartlearn?sessionId=' + sessionId))).json()).data.path as {
       status: string; nodes: LearningPathNode[];
     };
     const statuses = async () => (await detail()).nodes.map(node => node.status);
+    const resourceTypes = async (nodeId: string) =>
+      (await detail()).nodes.find(node => node.id === nodeId)!.resources.map(resource => resource.type).sort();
     const generate = (currentNodeId: string) =>
       retryResource(request('smartlearn/resources', 'POST', { sessionId, currentNodeId }));
-    expect(await statuses()).toEqual(['available', 'available', 'locked', 'locked']);
+    expect(await statuses()).toEqual(['in_progress', 'available', 'locked', 'locked']);
+    expect(await resourceTypes(first.id)).toEqual([...ALL_RESOURCE_TYPES].sort());
+    expect(await resourceTypes(second.id)).toEqual([]);
     expect((await generate(third.id)).status).toBe(409);
 
     async function complete(nodeId: string, answer: string) {
-      const generated = await streamed(await generate(nodeId));
-      expect(eventNames(generated)).toContain('practice_ready');
-      const resourceId = (await detail()).nodes.find(node => node.id === nodeId)!.resources.find(row => row.type === 'quiz')!.resourceId;
+      let node = (await detail()).nodes.find(node => node.id === nodeId)!;
+      if (!node.resources.some(resource => resource.type === 'quiz')) {
+        expect(eventNames(await streamed(await generate(nodeId)))).toContain('practice_ready');
+        node = (await detail()).nodes.find(item => item.id === nodeId)!;
+      }
+      const resourceId = node.resources.find(row => row.type === 'quiz')!.resourceId;
       const attemptId = crypto.randomUUID();
-      const response = await submitPractice(request('mobile/practice', 'POST', {
+      const submit = () => submitPractice(request('mobile/practice', 'POST', {
         attemptId, version: 1, answers: { '1': answer },
       }), { params: Promise.resolve({ resourceId }) });
-      expect(response.status).toBe(200);
-      return attemptId;
+      mocks.after.length = 0;
+      expect((await submit()).status).toBe(200);
+      return { attemptId, submit };
     }
 
-    const attemptId = await complete(second.id, '1');
-    expect(await statuses()).toEqual(['available', 'completed', 'locked', 'locked']);
+    const { attemptId } = await complete(second.id, '1');
+    await Promise.all(mocks.after.splice(0).map(work => work()));
+    expect(await statuses()).toEqual(['in_progress', 'completed', 'locked', 'locked']);
     expect((await generate(third.id)).status).toBe(409);
-    await complete(first.id, '0');
+    const { submit } = await complete(first.id, '0');
+    expect((await submit()).status).toBe(200);
     expect(await statuses()).toEqual(['completed', 'completed', 'available', 'locked']);
+    expect(mocks.after).toHaveLength(2);
+    const generationCalls = mocks.generate.mock.calls.length;
+    const deckCalls = mocks.deck.mock.calls.length;
+    await Promise.all(mocks.after.splice(0).map(work => work()));
+    expect(await statuses()).toEqual(['completed', 'completed', 'in_progress', 'locked']);
+    expect(await resourceTypes(third.id)).toEqual([...ALL_RESOURCE_TYPES].sort());
+    expect(await resourceTypes(fourth.id)).toEqual([]);
+    expect(mocks.generate.mock.calls.length - generationCalls).toBe(ALL_RESOURCE_TYPES.length - 1);
+    expect(mocks.deck.mock.calls.length - deckCalls).toBe(1);
     const listed = (await (await listMobilePaths(request('mobile/learning-paths?resume=1'))).json()).data;
     expect(listed.items).toContainEqual(expect.objectContaining({ sessionId, completedCount: 2, nodeCount: 4 }));
     expect(listed.resume).toMatchObject({ sessionId, nodeId: third.id });
 
-    expect(eventNames(await streamed(await generate(third.id)))).toContain('practice_ready');
     const started = (await detail()).nodes.find(node => node.id === third.id);
     const replacement = task('性能分析', '新阶段');
     mocks.stages.mockRejectedValueOnce(new Error('Fixture planner unavailable'));

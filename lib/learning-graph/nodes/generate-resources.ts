@@ -1,6 +1,6 @@
 import { generateStandardPptDeck, generateStandardPptOutline, type StandardPptGenerationOptions } from '@/lib/generation/standard-ppt';
 import type { LearningPath } from '@/lib/types/learning-path';
-import { RESOURCE_TYPE_LABELS, type Resource, type ResourceType } from '@/lib/types/resource';
+import { ALL_RESOURCE_TYPES, RESOURCE_TYPE_LABELS, type Resource, type ResourceType } from '@/lib/types/resource';
 import { generateResource } from '../helpers/resource-generators';
 import type { LearningStateType } from '../state';
 import type { LearnEvent } from '../types';
@@ -56,6 +56,7 @@ export async function generateResourcesNode(
   let types = recommended;
   if (regenerating && state.retryResourceType) types = [state.retryResourceType];
   else if (regenerating && !override) types = node.recommendedTypes ?? recommended;
+  if (state.generateAllResources) types = [...new Set([...MOBILE_PATH_RESOURCES, ...ALL_RESOURCE_TYPES])];
   const plannedNode = { ...node, recommendedTypes: types };
   const previousPath = persistence?.path;
   const nodes = state.action === 'generate_resources' && previousPath
@@ -81,7 +82,8 @@ export async function generateResourcesNode(
     path = await persistence.saveNode(path);
     if (state.mobilePath) write({ type: 'path_update', path });
   }
-  if (persistence && regenerating && !state.retryResourceType && (override || !node.recommendedTypes)) {
+  if (persistence && regenerating && !state.retryResourceType && (override || !node.recommendedTypes ||
+    (state.generateAllResources && types.some(type => !node.recommendedTypes?.includes(type))))) {
     await persistence.saveRecommendation(node.id, types);
   }
 

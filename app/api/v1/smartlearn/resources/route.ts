@@ -3,6 +3,7 @@ import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
 import { findPathSession, isMobilePath, isStagedMobilePath, readGeneratedPath, readMobileStagePath } from '@/lib/api/server/path-generation';
 import { streamLearningPath, retryResourceSchema } from '@/lib/api/server/path-stream';
 import { MOBILE_PATH_RESOURCES } from '@/lib/mobile/questions';
+import { isStageFirstTask } from '@/lib/mobile/path-progress';
 
 export async function POST(req: NextRequest) {
   return withAuth(req, async (_, { user }) => {
@@ -23,6 +24,7 @@ export async function POST(req: NextRequest) {
     }
     return streamLearningPath(req, user.id, session, path, {
       action: 'generate_resources', currentNodeId, retryResourceType: resourceType, aiConfig,
+      generateAllResources: !resourceType && isStagedMobilePath(session) && !!path && isStageFirstTask(path.nodes, node),
       resourceFeedback, nodeDecisionOverrides,
     });
   });

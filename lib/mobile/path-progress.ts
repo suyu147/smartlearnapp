@@ -26,3 +26,15 @@ export function applyStageProgress(nodes: LearningPathNode[], practicedQuizIds: 
 export function currentStageTask(nodes: LearningPathNode[]) {
   return nodes.find(node => node.status === 'in_progress') ?? nodes.find(node => node.status === 'available');
 }
+
+export function nextUnlockedStageTask(nodes: LearningPathNode[], finishedTaskId: string) {
+  const finishedIndex = nodes.findIndex(node => node.id === finishedTaskId && node.status === 'completed');
+  const stage = nodes[finishedIndex]?.stage;
+  if (!stage) return;
+  const firstTask = nodes.slice(finishedIndex + 1).find(node => node.stage?.id !== stage.id);
+  if (firstTask?.stage && firstTask.status !== 'locked') return firstTask;
+}
+
+export function isStageFirstTask(nodes: LearningPathNode[], task: LearningPathNode) {
+  return !!task.stage && nodes.find(node => node.stage?.id === task.stage?.id)?.id === task.id;
+}

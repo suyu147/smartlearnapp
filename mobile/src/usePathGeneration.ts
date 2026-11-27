@@ -58,7 +58,7 @@ export function usePathGeneration(token: string | undefined, onAuthError: () => 
           return {
             ...previous,
             sessionId: currentId,
-            nodeId: previous.nodeId ?? path?.nodes.find(node => node.status === 'in_progress')?.id,
+            nodeId: metadata?.node?.id ?? previous.nodeId ?? path?.nodes.find(node => node.status === 'in_progress')?.id,
             stage: phases[event.stage ?? ''] ?? previous.stage,
             path: path ?? previous.path,
             resources: resource ? [...previous.resources.filter(item => item.id !== resource.id), resource] : previous.resources,

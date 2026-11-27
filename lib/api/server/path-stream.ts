@@ -5,6 +5,8 @@ import { createLearnEventWriter } from '@/lib/deeptutor/capabilities/smartlearn/
 import { getLearnerProfileService } from '@/lib/deeptutor/services/learner-profile';
 import { compileLearningGraph } from '@/lib/learning-graph/graph';
 import type { LearningStateType } from '@/lib/learning-graph/state';
+import type { LearnEvent } from '@/lib/learning-graph/types';
+import { createLogger } from '@/lib/logger';
 import { createSSEStream } from '@/lib/server/sse-stream';
 import { smartLearnAiConfig } from '@/lib/server/smartlearn-input';
 import type { LearningPath } from '@/lib/types/learning-path';
@@ -12,6 +14,7 @@ import { ALL_RESOURCE_TYPES, type ResourceType } from '@/lib/types/resource';
 import { isMobilePath, isStagedMobilePath, mobilePracticeProgress, persistNodeRecommendation, persistNodeResource, persistPlannedNode, readGeneratedPath, readMobileStagePath, withStageProgress } from './path-generation';
 import { mobileResource } from '@/lib/mobile/resources';
 import { planMobileStages } from '@/lib/mobile/path-planner';
+import { isStageFirstTask, nextUnlockedStageTask } from '@/lib/mobile/path-progress';
 
 const resourceType = z.enum(ALL_RESOURCE_TYPES as [ResourceType, ...ResourceType[]]);
 const identifier = z.string().min(1).max(128);
@@ -56,15 +59,91 @@ export const retryResourceSchema = z.object({
   aiConfig: smartLearnAiConfig.optional(),
 });
 
-type PathInput = Omit<z.infer<typeof pathRequestSchema>, 'action'> & {
-  action: LearningStateType['action'] | 'replan';
+type GraphInput = Omit<z.infer<typeof pathRequestSchema>, 'action'> & {
+  action: LearningStateType['action'];
   retryResourceType?: ResourceType;
+  generateAllResources?: boolean;
 };
+type PathInput = GraphInput | (Omit<GraphInput, 'action'> & { action: 'replan' });
 
-const mobileGeneration = new Set<string>();
+const mobileGeneration = new Map<string, Promise<void>>();
+const generationKey = (userId: string, sessionId: string) => JSON.stringify([userId, sessionId]);
+const log = createLogger('mobile-stage-resources');
 
 export function isMobileGenerationRunning(userId: string, sessionId: string) {
-  return mobileGeneration.has(JSON.stringify([userId, sessionId]));
+  return mobileGeneration.has(generationKey(userId, sessionId));
+}
+
+function trackMobileGeneration(key: string) {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  mobileGeneration.set(key, promise);
+  return () => {
+    mobileGeneration.delete(key);
+    resolve();
+  };
+}
+
+async function runPathGraph(
+  { userId, session, signal, turnId, staged, write }: {
+    userId: string; session: DtSession; signal: AbortSignal; turnId: string; staged: boolean; write?: (event: LearnEvent) => void;
+  },
+  path: LearningPath | null,
+  body: GraphInput,
+  evaluationFeedback: LearningStateType['evaluationFeedback'] = null,
+) {
+  const sessionId = session.id;
+  const profile = await getLearnerProfileService().getProfile(userId);
+  const currentNode = path?.nodes.find(node => node.id === body.currentNodeId) ?? null;
+  const advancing = body.action === 'node_complete' || body.action === 'start';
+  const completedNodes = (path?.nodes ?? [])
+    .filter(node => node.status === 'completed' || (advancing && node.id === currentNode?.id))
+    .map(node => ({ ...node, status: 'completed' as const }));
+  const initialState: Partial<LearningStateType> = {
+    action: body.action, mobilePath: isMobilePath(session), attemptId: body.attemptId ?? turnId, sessionId,
+    goal: path?.goal ?? session.title, profile: profile.dimensions,
+    completedNodes, currentNodeId: currentNode?.id ?? null, currentNodeTitle: currentNode?.title ?? null,
+    currentNode, quizResults: body.quizResults ?? [], aiConfig: body.aiConfig,
+    resourceFeedback: body.resourceFeedback ?? [], nodeDecisionOverrides: body.nodeDecisionOverrides ?? {},
+    retryResourceType: body.retryResourceType, generateAllResources: body.generateAllResources,
+    message: body.message ?? '', conversationHistory: body.conversationHistory ?? [],
+    attachedResources: body.attachedResources ?? [],
+    learnerSnapshot: null, resourcePlan: null, generatedResources: [],
+    evaluationResult: null, evaluationScore: null, evaluationFeedback, updatedProfile: null,
+  };
+  await compileLearningGraph().invoke(initialState as LearningStateType, {
+    configurable: {
+      writer: write, sessionId, turnId, userId,
+      pathPersistence: {
+        path, signal,
+        saveNode: (next: LearningPath) => persistPlannedNode(userId, next, session.revision),
+        saveResource: (nodeId: string, resource: Parameters<typeof persistNodeResource>[3]) =>
+          persistNodeResource(userId, sessionId, nodeId, resource),
+        saveRecommendation: (nodeId: string, types: ResourceType[]) =>
+          persistNodeRecommendation(userId, sessionId, nodeId, types),
+        readPath: () => (staged ? readMobileStagePath : readGeneratedPath)(userId, sessionId),
+      },
+    },
+  });
+}
+
+export async function generateUnlockedStageResources(userId: string, session: DtSession, finishedTaskId: string) {
+  const sessionId = session.id;
+  const key = generationKey(userId, sessionId);
+  for (let running = mobileGeneration.get(key); running; running = mobileGeneration.get(key)) await running;
+  const release = trackMobileGeneration(key);
+  try {
+    const path = await readMobileStagePath(userId, sessionId);
+    if (!path) return;
+    const task = nextUnlockedStageTask(path.nodes, finishedTaskId);
+    if (!task || ALL_RESOURCE_TYPES.every(type => task.resources.some(resource => resource.type === type))) return;
+    await runPathGraph({
+      userId, session, signal: AbortSignal.timeout(240_000), turnId: crypto.randomUUID(), staged: true,
+    }, path, { action: 'generate_resources', currentNodeId: task.id, generateAllResources: true });
+  } catch (error) {
+    log.error('Automatic stage resource generation failed', sessionId, error);
+  } finally {
+    release();
+  }
 }
 
 export async function streamLearningPath(
@@ -77,11 +156,11 @@ export async function streamLearningPath(
   const mobilePath = isMobilePath(session);
   const staged = isStagedMobilePath(session);
   const tracked = mobilePath && ['start', 'node_complete', 'generate_resources', 'replan'].includes(body.action);
-  const key = JSON.stringify([userId, sessionId]);
+  const key = generationKey(userId, sessionId);
   if (tracked && mobileGeneration.has(key)) {
     return Response.json({ error: '这个课节正在生成，请稍后刷新' }, { status: 409 });
   }
-  if (tracked) mobileGeneration.add(key);
+  const release = tracked ? trackMobileGeneration(key) : undefined;
   const signal = tracked ? AbortSignal.timeout(240_000) : req.signal;
   const stream = createSSEStream(source, sessionId, async emit => {
     try {
@@ -102,6 +181,7 @@ export async function streamLearningPath(
         }
         writeEvent(event);
       };
+      const graph = { userId, session, signal, turnId, staged, write };
       const active = path?.nodes.find(node => node.status === 'in_progress');
       if (body.action === 'replan' || (staged && body.action === 'start' && !path)) {
         write({ type: 'phase_start', phase: 'plan' });
@@ -126,46 +206,21 @@ export async function streamLearningPath(
         const saved = await persistPlannedNode(userId, nextPath, session.revision, { ...metadata, planMode: 'staged' });
         write({ type: 'path_update', path: saved });
         write({ type: 'phase_end', phase: 'plan' });
+        const firstTask = saved.nodes.find(node => node.status === 'available' || node.status === 'in_progress');
+        if (firstTask && isStageFirstTask(saved.nodes, firstTask) && (kept.length === 0 || !keptIds.has(firstTask.id))) {
+          write({ type: 'node_ready', node: firstTask });
+          await runPathGraph({ ...graph, staged: true }, saved, {
+            action: 'generate_resources', currentNodeId: firstTask.id, aiConfig: body.aiConfig, generateAllResources: true,
+          });
+        }
       } else if (body.action === 'start' && (staged || (active && !body.currentNodeId))) {
         write({ type: 'path_update', path: path! });
       } else {
-        const profile = await getLearnerProfileService().getProfile(userId);
-        const currentNode = path?.nodes.find(node => node.id === body.currentNodeId) ?? null;
-        const advancing = body.action === 'node_complete' || body.action === 'start';
-        const completedNodes = (path?.nodes ?? [])
-          .filter(node => node.status === 'completed' || (advancing && node.id === currentNode?.id))
-          .map(node => ({ ...node, status: 'completed' as const }));
-        const initialState: Partial<LearningStateType> = {
-          action: body.action, mobilePath, attemptId: body.attemptId ?? turnId, sessionId,
-          goal: path?.goal ?? session.title, profile: profile.dimensions,
-          completedNodes, currentNodeId: currentNode?.id ?? null, currentNodeTitle: currentNode?.title ?? null,
-          currentNode, quizResults: body.quizResults ?? [], aiConfig: body.aiConfig,
-          resourceFeedback: body.resourceFeedback ?? [], nodeDecisionOverrides: body.nodeDecisionOverrides ?? {},
-          retryResourceType: body.retryResourceType,
-          message: body.message ?? '', conversationHistory: body.conversationHistory ?? [],
-          attachedResources: body.attachedResources ?? [],
-          learnerSnapshot: null, resourcePlan: null, generatedResources: [],
-          evaluationResult: null, evaluationScore: null, evaluationFeedback, updatedProfile: null,
-        };
-        await compileLearningGraph().invoke(initialState as LearningStateType, {
-          configurable: {
-            writer: write, sessionId, turnId, userId,
-            pathPersistence: {
-              path,
-              signal,
-              saveNode: (next: LearningPath) => persistPlannedNode(userId, next, session.revision),
-              saveResource: (nodeId: string, resource: Parameters<typeof persistNodeResource>[3]) =>
-                persistNodeResource(userId, sessionId, nodeId, resource),
-              saveRecommendation: (nodeId: string, types: ResourceType[]) =>
-                persistNodeRecommendation(userId, sessionId, nodeId, types),
-              readPath: () => (staged ? readMobileStagePath : readGeneratedPath)(userId, sessionId),
-            },
-          },
-        });
+        await runPathGraph(graph, path, body, evaluationFeedback);
       }
       emit(createStreamEvent('done', { source, sessionId, turnId }));
     } finally {
-      if (tracked) mobileGeneration.delete(key);
+      release?.();
     }
   });
   return new Response(stream, { headers: {
