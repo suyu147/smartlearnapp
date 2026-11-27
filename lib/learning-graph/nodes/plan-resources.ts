@@ -51,7 +51,7 @@ export async function planResourcesNode(
   const write = getWriter(config);
   const node = state.currentNode;
   if (!node) return { phase: 'resource_plan' };
-  await initializeLearningTopics(getUserId(config), node.knowledgePoints);
+  if (!state.retryResourceType) await initializeLearningTopics(getUserId(config), node.knowledgePoints);
   write({ type: 'phase_start', phase: 'resource_plan' });
 
   try {

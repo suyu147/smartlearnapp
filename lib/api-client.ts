@@ -148,8 +148,8 @@ export interface StreamEventData {
 
 export type SSEEventCallback = (event: SSEEnvelope) => void;
 
-export interface SSEStreamOptions {
-  onEvent: SSEEventCallback;
+export interface SSEStreamOptions<T = SSEEnvelope> {
+  onEvent: (event: T) => void;
   onError?: (error: Error) => void;
   signal?: AbortSignal;
 }
@@ -158,9 +158,9 @@ export interface SSEStreamOptions {
  * Parse and consume a Server-Sent Events stream from a fetch Response.
  * The /api/v1/turns endpoint emits `data: {json}\n\n` lines.
  */
-export async function consumeSSEStream(
+export async function consumeSSEStream<T = SSEEnvelope>(
   response: Response,
-  options: SSEStreamOptions,
+  options: SSEStreamOptions<T>,
 ): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Response body is not readable');
@@ -188,7 +188,7 @@ export async function consumeSSEStream(
         for (const line of trimmed.split('\n')) {
           if (line.startsWith('data: ')) {
             try {
-              const event: SSEEnvelope = JSON.parse(line.slice(6));
+              const event: T = JSON.parse(line.slice(6));
               options.onEvent(event);
             } catch (e) {
               // Malformed JSON, skip

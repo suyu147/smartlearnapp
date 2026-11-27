@@ -40,6 +40,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const isAuthPage = pathname.startsWith('/auth/');
   const isOnboardingPage = pathname.startsWith('/onboarding');
+  const isCoursewarePage = pathname === '/smartlearn';
 
   // --- Compute redirect target (pure, no side-effects during render) ---
   let redirectTo: string | null = null;
@@ -48,7 +49,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       redirectTo = '/auth/login';
     } else if (mode === 'multi' && user && isAuthPage) {
       redirectTo = hasProfile ? '/home' : '/onboarding';
-    } else if (user && !hasProfile && !isOnboardingPage && !isAuthPage) {
+    } else if (user && !hasProfile && !isOnboardingPage && !isAuthPage && !isCoursewarePage) {
       // Authenticated but profile not complete → redirect to onboarding
       redirectTo = '/onboarding';
     } else if (user && hasProfile && isOnboardingPage) {

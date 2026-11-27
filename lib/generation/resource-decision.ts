@@ -175,7 +175,7 @@ export function decideNodeResourcePlan(input: DecisionInputV2): ResourceDecision
     markSkip('reading', '练习/复习类节点不优先生成拓展阅读');
     markSkip('video', '练习/复习类节点排除视频');
     markSkip('code', needsCode ? '虽然涉及代码，但练习/复习规则优先，仅保留测验' : '练习/复习类节点不优先生成代码');
-    markSkip('ppt', '练习/复习类节点排除动态课件');
+    markSkip('ppt', '练习或复习节点优先安排练习资源');
   } else if (isIntroNode) {
     rulesApplied.push('intro_document_reading_only');
     markGenerate('document', '导论/背景/历史类内容适合讲解文档', 0.9);
@@ -184,7 +184,7 @@ export function decideNodeResourcePlan(input: DecisionInputV2): ResourceDecision
     markGenerate('reading', '导论/背景/历史类内容适合拓展阅读', 0.9);
     markSkip('video', '导论/背景/历史类内容不优先生成视频');
     markSkip('code', '导论/背景/历史类内容不优先生成代码');
-    markSkip('ppt', '导论/背景/历史类内容不优先生成动态课件');
+    markSkip('ppt', '导论、背景和历史类内容优先安排阅读资源');
   } else {
     rulesApplied.push('default_core_resources');
     for (const type of CORE_RESOURCE_TYPES) {
@@ -216,11 +216,11 @@ export function decideNodeResourcePlan(input: DecisionInputV2): ResourceDecision
     }
 
     if (allowPPT && node.knowledgePoints.length > 0) {
-      markGenerate('ppt', '该节点存在明确知识点，适合生成动态课件', 0.78);
+      markGenerate('ppt', '该节点存在明确知识点，适合生成标准 PPT', 0.78);
     } else if (!allowPPT) {
-      markSkip('ppt', '当前系统约束禁止生成动态课件');
+      markSkip('ppt', '当前资源约束排除标准 PPT');
     } else {
-      markSkip('ppt', '节点缺少知识点，跳过动态课件');
+      markSkip('ppt', '节点缺少知识点，跳过标准 PPT');
     }
   }
 

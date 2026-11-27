@@ -1,179 +1,125 @@
-import { generateId } from '@/lib/utils';
-import type { Resource } from '@/lib/types/resource';
-import type { LearnEvent } from '../types';
+import { generateStandardPptDeck, generateStandardPptOutline, type StandardPptGenerationOptions } from '@/lib/generation/standard-ppt';
+import type { LearningPath } from '@/lib/types/learning-path';
+import { RESOURCE_TYPE_LABELS, type Resource, type ResourceType } from '@/lib/types/resource';
+import { generateResource } from '../helpers/resource-generators';
 import type { LearningStateType } from '../state';
-import { generatePptScenes } from '../helpers/ppt-generator';
-import type { Scene } from '@/lib/types/stage';
+import type { LearnEvent } from '../types';
 
-function getWriter(config: { configurable?: { writer?: (event: LearnEvent) => void } }) {
-  return config.configurable?.writer ?? (() => undefined);
+export interface PathGenerationPersistence {
+  path: LearningPath | null;
+  saveNode(path: LearningPath): Promise<LearningPath>;
+  saveResource(nodeId: string, resource: Resource): Promise<Resource>;
+  saveRecommendation(nodeId: string, types: ResourceType[]): Promise<void>;
+  readPath(): Promise<LearningPath | null>;
+  signal: AbortSignal;
 }
 
-function getUserId(config: { configurable?: { userId?: string } }): string {
-  return config.configurable?.userId ?? 'anonymous';
-}
+async function generateContent(type: ResourceType, state: LearningStateType, signal: AbortSignal) {
+  const node = state.currentNode!;
+  if (type !== 'ppt') return generateResource(type, node.knowledgePoints, state.profile, state.aiConfig);
 
-/**
- * 生成 PPT 资源。
- * 内容 + 动作合并生成，页面并行，并逐页推送 scene_ready。
- */
-async function generatePptResource(
-  knowledgePoints: string[],
-  aiConfig: LearningStateType['aiConfig'],
-  userId: string,
-  write: (event: LearnEvent) => void,
-  nodeId: string,
-  pptOptions: {
-    generateImages: boolean;
-    includeInteractive: boolean;
-    includeQuiz: boolean;
-    maxPages?: number;
-  },
-): Promise<{ resource: Resource; pptScenes: Scene[] } | null> {
-  write({ type: 'agent_status', agentId: 'ppt', agentName: '课件Agent', status: 'running', resourceType: 'ppt' });
-
-  try {
-    const pptScenes = await generatePptScenes(
-      `讲解：${knowledgePoints.join('、')}`,
-      aiConfig,
-      {
-        generateImages: pptOptions.generateImages,
-        includeInteractive: pptOptions.includeInteractive,
-        includeQuiz: pptOptions.includeQuiz,
-        maxPages: pptOptions.maxPages,
-      },
-      knowledgePoints,
-      (msg) => write({ type: 'text_delta', text: `[PPT] ${msg}\n` }),
-      (scene, completed, total) => {
-        write({
-          type: 'scene_ready',
-          scene,
-          index: completed - 1,
-          total,
-          nodeId,
-          userId,
-          knowledgePoints,
-        });
-      },
-    );
-
-    if (pptScenes.length > 0) {
-      write({ type: 'ppt_ready', scenes: pptScenes, nodeId, userId, knowledgePoints });
-      const resource: Resource = {
-        id: generateId(),
-        userId,
-        type: 'ppt',
-        title: `${knowledgePoints.join('、')} - 动态课件`,
-        content: `PPT课件：共${pptScenes.length}页`,
-        sourceAgent: 'ppt',
-        status: 'ready',
-        createdAt: new Date().toISOString(),
-        metadata: { knowledgePoints, profileUsed: true, pptData: pptScenes },
-      };
-      write({ type: 'resource_delta', resource });
-      write({ type: 'agent_status', agentId: 'ppt', agentName: '课件Agent', status: 'completed', resourceType: 'ppt' });
-      return { resource, pptScenes };
-    }
-
-    // PPT 场景为空视为失败
-    write({ type: 'agent_status', agentId: 'ppt', agentName: '课件Agent', status: 'failed', resourceType: 'ppt' });
-    const fallbackResource: Resource = {
-      id: generateId(),
-      userId,
-      type: 'ppt',
-      title: `${knowledgePoints.join('、')} - ppt（生成失败）`,
-      content: '资源生成失败，请重试',
-      sourceAgent: 'ppt',
-      status: 'failed',
-      createdAt: new Date().toISOString(),
-      metadata: { knowledgePoints, error: true },
-    };
-    write({ type: 'resource_delta', resource: fallbackResource });
-    return null;
-  } catch (_err) {
-    write({ type: 'agent_status', agentId: 'ppt', agentName: '课件Agent', status: 'failed', resourceType: 'ppt' });
-    const fallbackResource: Resource = {
-      id: generateId(),
-      userId,
-      type: 'ppt',
-      title: `${knowledgePoints.join('、')} - ppt（生成失败）`,
-      content: '资源生成失败，请重试',
-      sourceAgent: 'ppt',
-      status: 'failed',
-      createdAt: new Date().toISOString(),
-      metadata: { knowledgePoints, error: true },
-    };
-    write({ type: 'resource_delta', resource: fallbackResource });
-    return null;
-  }
+  const options: StandardPptGenerationOptions = {
+    topic: node.title.slice(0, 200), slideCount: 8, language: 'zh-CN',
+    style: 'professional', includeImages: false, aiConfig: state.aiConfig,
+  };
+  const outline = await generateStandardPptOutline(options, signal);
+  const deck = await generateStandardPptDeck(options, outline, signal);
+  return {
+    title: deck.title,
+    content: deck.slides.map(slide => slide.title).join('\n'),
+    metadata: { language: deck.language, standardPptData: deck },
+  };
 }
 
 export async function generateResourcesNode(
   state: LearningStateType,
-  config: { configurable?: { writer?: (event: LearnEvent) => void; userId?: string } },
+  config: { configurable?: {
+    writer?: (event: LearnEvent) => void;
+    userId?: string;
+    pathPersistence?: PathGenerationPersistence;
+  } },
 ) {
-  const write = getWriter(config);
+  const write = config.configurable?.writer ?? (() => undefined);
+  const persistence = config.configurable?.pathPersistence;
+  const userId = config.configurable?.userId ?? 'anonymous';
   const node = state.currentNode;
-  const resourcePlan = state.resourcePlan;
-  if (!node || !resourcePlan) return { phase: 'generate' };
+  const plan = state.resourcePlan;
+  if (!node || !plan) return { phase: 'generate' };
   write({ type: 'phase_start', phase: 'generate' });
 
-  try {
-    // 智能学习只生成动态课件；PPT 内部仍保留 quiz / interactive 场景。
-    const generatedResources: Resource[] = [];
-    let pptScenes: Scene[] | null = null;
+  const regenerating = state.action === 'generate_resources';
+  const override = state.nodeDecisionOverrides?.[node.id];
+  const recommended = plan.items.filter(item => item.action === 'generate' ||
+    (override?.includes(item.type) && node.resources.some(resource => resource.type === item.type))).map(item => item.type);
+  let types = recommended;
+  if (regenerating && state.retryResourceType) types = [state.retryResourceType];
+  else if (regenerating && !override) types = node.recommendedTypes ?? recommended;
+  const plannedNode = { ...node, recommendedTypes: types };
+  const previousPath = persistence?.path;
+  const nodes = state.action === 'generate_resources' && previousPath
+    ? previousPath.nodes
+    : [...state.completedNodes.filter(item => item.id !== node.id), plannedNode];
+  const now = new Date().toISOString();
+  let path: LearningPath = {
+    id: previousPath?.id ?? state.sessionId,
+    sessionId: state.sessionId,
+    userId,
+    goal: state.goal,
+    nodes,
+    edges: state.action === 'generate_resources' && previousPath
+      ? previousPath.edges
+      : [...(previousPath?.edges ?? []), ...node.prerequisites.map(from => ({ from, to: node.id }))],
+    estimatedDays: Math.max(1, nodes.length),
+    status: previousPath?.status ?? 'active',
+    createdAt: previousPath?.createdAt ?? now,
+    updatedAt: now,
+  };
 
-    if (resourcePlan.execution.shouldGeneratePPT) {
-      const result = await generatePptResource(
-        node.knowledgePoints,
-        state.aiConfig,
-        getUserId(config),
-        write,
-        node.id,
-        {
-          generateImages: state.generatePptImages ?? false,
-          includeInteractive: state.enablePptInteractive ?? true,
-          includeQuiz: state.enablePptQuiz ?? true,
-          maxPages: state.pptMaxPages,
-        },
-      );
-      if (result) {
-        generatedResources.push(result.resource);
-        pptScenes = result.pptScenes;
-      }
-    }
-
-    // Build the full node list: all completed nodes + the current node with resource refs
-    const nodeWithResources = { ...node, resources: generatedResources.map((resource) => ({ resourceId: resource.id, type: resource.type, title: resource.title })) };
-    const allNodes = [...state.completedNodes, nodeWithResources]
-
-    // Build edges: link each completed node to its successor, plus edge from last completed to current
-    const allEdges: { from: string; to: string }[] = []
-    for (let i = 0; i < state.completedNodes.length - 1; i++) {
-      allEdges.push({ from: state.completedNodes[i].id, to: state.completedNodes[i + 1].id })
-    }
-    if (state.completedNodes.length > 0) {
-      allEdges.push({ from: state.completedNodes[state.completedNodes.length - 1].id, to: node.id })
-    }
-
-    const path = {
-      id: state.sessionId,
-      userId: getUserId(config),
-      goal: state.goal,
-      nodes: allNodes,
-      edges: allEdges,
-      estimatedDays: Math.max(1, allNodes.length),
-      status: 'active' as const,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    write({ type: 'path_update', path });
-    write({ type: 'phase_end', phase: 'generate' });
-    return { generatedResources, pptScenes, phase: 'generate' };
-  } catch (error) {
-    write({ type: 'error', message: error instanceof Error ? error.message : String(error) });
-    write({ type: 'phase_end', phase: 'generate' });
-    return { phase: 'generate' };
+  if (persistence && state.action !== 'generate_resources') path = await persistence.saveNode(path);
+  if (persistence && regenerating && !state.retryResourceType && (override || !node.recommendedTypes)) {
+    await persistence.saveRecommendation(node.id, types);
   }
+
+  const generatedResources: Resource[] = [];
+  const signal = persistence?.signal ?? new AbortController().signal;
+  for (let start = 0; start < types.length; start += 3) {
+    await Promise.all(types.slice(start, start + 3).map(async (type) => {
+      if (node.resources.some(resource => resource.type === type)) return;
+      const label = RESOURCE_TYPE_LABELS[type];
+      write({ type: 'agent_status', agentId: type, agentName: label, status: 'running', resourceType: type });
+      try {
+        signal.throwIfAborted();
+        const data = await generateContent(type, state, signal);
+        signal.throwIfAborted();
+        let resource: Resource = {
+          ...data,
+          id: crypto.randomUUID(), userId, type, status: 'ready',
+          sourceAgent: type === 'ppt' ? 'resource-ppt' : 'learning-path',
+          sessionId: state.sessionId, createdAt: new Date().toISOString(),
+          metadata: { ...data.metadata, knowledgePoints: node.knowledgePoints, origin: 'learning-path', nodeId: node.id },
+        };
+        if (persistence) resource = await persistence.saveResource(node.id, resource);
+        generatedResources.push(resource);
+        write({ type: 'resource_delta', resource });
+        write({ type: 'agent_status', agentId: type, agentName: label, status: 'completed', resourceType: type });
+      } catch {
+        write({ type: 'resource_failed', nodeId: node.id, resourceType: type, message: `${label}生成失败，可以单独重试` });
+        write({ type: 'agent_status', agentId: type, agentName: label, status: 'failed', resourceType: type });
+      }
+    }));
+  }
+
+  if (persistence) {
+    path = await persistence.readPath() ?? path;
+  } else {
+    path.nodes = path.nodes.map(item => item.id === node.id ? {
+      ...item,
+      resources: [...item.resources, ...generatedResources.map(resource => ({
+        resourceId: resource.id, type: resource.type, title: resource.title,
+      }))],
+    } : item);
+  }
+  write({ type: 'path_update', path });
+  write({ type: 'phase_end', phase: 'generate' });
+  return { generatedResources, phase: 'generate' };
 }

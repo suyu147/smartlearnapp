@@ -35,7 +35,10 @@ export async function GET(req: NextRequest) {
     const id = req.nextUrl.searchParams.get('id');
     if (!id || id.length > 128) return NextResponse.json({ error: '缺少有效的 PPT 资源 ID' }, { status: 400 });
     const resource = await prisma.resource.findFirst({
-      where: { id, userId: user.id, type: 'ppt', sourceAgent: 'resource-ppt', sessionId: null, deletedAt: null, status: 'ready' },
+      where: {
+        id, userId: user.id, type: 'ppt', sourceAgent: 'resource-ppt', deletedAt: null, status: 'ready',
+        OR: [{ sessionId: null }, { session: { userId: user.id, deletedAt: null } }],
+      },
       select: { metadata: true },
     });
     const metadata = resource?.metadata as { standardPptData?: StandardPptDeck } | null;

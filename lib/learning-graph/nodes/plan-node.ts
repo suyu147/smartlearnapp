@@ -95,6 +95,6 @@ export async function planNode(
   } catch (error) {
     write({ type: 'error', message: error instanceof Error ? error.message : String(error) });
     write({ type: 'phase_end', phase: 'plan' });
-    return { phase: 'plan' };
+    return { currentNode: null, phase: 'plan' };
   }
 }

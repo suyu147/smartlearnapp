@@ -63,6 +63,7 @@ export type LearnEvent =
   | { type: 'node_ready'; node: LearningPathNode }
   | { type: 'resource_decision'; nodeId: string; decision: ResourceDecisionResultV2 }
   | { type: 'resource_delta'; resource: Resource }
+  | { type: 'resource_failed'; nodeId: string; resourceType: ResourceType; message: string }
   | { type: 'ppt_ready'; scenes: Scene[]; nodeId?: string; userId?: string; knowledgePoints?: string[] }
   | { type: 'scene_ready'; scene: Scene; index: number; total: number; nodeId?: string; userId?: string; knowledgePoints?: string[] }
   | { type: 'evaluation_result'; evaluation: EvaluationResultPayload; score: number }

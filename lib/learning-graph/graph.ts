@@ -10,6 +10,7 @@ import { updateProfileNode } from './nodes/update-profile';
 import { tutorRespondNode } from './nodes/tutor-respond';
 
 function afterEvaluate(state: LearningStateType) {
+  if (!state.evaluationResult) return END;
   return state.action === 'node_complete' ? 'update_profile' : 'update_profile_end';
 }
 
@@ -41,6 +42,7 @@ export function compileLearningGraph() {
     .addConditionalEdges('evaluate', afterEvaluate as never, {
       update_profile: 'update_profile',
       update_profile_end: 'update_profile_end',
+      [END]: END,
     })
     .addConditionalEdges('update_profile', afterUpdateProfile as never, {
       plan_node: 'plan_node',

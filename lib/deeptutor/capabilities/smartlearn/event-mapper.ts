@@ -165,6 +165,11 @@ export function mapLearnEventToStreamEvent(
         },
       });
 
+    case 'resource_failed':
+      return createStreamEvent('result', {
+        ...base,
+        metadata: { learnEventType: 'resource_failed', nodeId: event.nodeId, resourceType: event.resourceType, message: event.message },
+      });
     case 'path_update':
       return createStreamEvent('result', {
         ...base,

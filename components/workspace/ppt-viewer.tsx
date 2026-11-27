@@ -108,7 +108,7 @@ function SlidePreview({
           <iframe
             srcDoc={interactiveHtml}
             className="h-[560px] w-full border-0"
-            sandbox="allow-scripts allow-same-origin"
+            sandbox="allow-scripts"
             title={scene.title}
           />
         ) : (
@@ -360,7 +360,7 @@ export function PPTViewer({ scenes, onHotspotClick, onCodeButtonClick }: Props) 
       utteranceRef.current = utterance;
       window.speechSynthesis.speak(utterance);
     });
-  }, []);
+  }, [playbackRate, volume]);
 
   // ── 核心播放引擎 ──
 
@@ -518,11 +518,7 @@ export function PPTViewer({ scenes, onHotspotClick, onCodeButtonClick }: Props) 
     );
   }
 
-  const volumeIcon = useMemo(() => {
-    if (volume === 0) return <VolumeX className="h-4 w-4" />;
-    if (volume < 0.5) return <Volume1 className="h-4 w-4" />;
-    return <Volume2 className="h-4 w-4" />;
-  }, [volume]);
+  const VolumeIcon = volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
   return (
     <div className="space-y-3">
@@ -638,7 +634,7 @@ export function PPTViewer({ scenes, onHotspotClick, onCodeButtonClick }: Props) 
               className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
               aria-label={volume === 0 ? '取消静音' : '静音'}
             >
-              {volumeIcon}
+                <VolumeIcon className="h-4 w-4" />
             </button>
             <input
               type="range"

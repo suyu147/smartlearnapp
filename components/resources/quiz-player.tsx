@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useRef } from 'react';
-import { apiPost } from '@/lib/api-client';
+import { apiPost, consumeSSEStream } from '@/lib/api-client';
 import { toast } from 'sonner';
 import { getApiToken } from '@/lib/auth-token';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -9,8 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { parseJsonResponse } from '@/lib/generation/json-repair';
 import { useSettingsStore } from '@/lib/store/settings';
-import { useLearningProfileStore } from '@/lib/store/learning-profile';
-import { useLearningPathStore } from '@/lib/store/learning-path';
+import type { StreamEvent } from '@/lib/deeptutor/core/types';
 import type { Quiz } from '@/lib/types/resource';
 import type { ProfileDimensions } from '@/lib/types/profile';
 
@@ -68,8 +67,6 @@ export function QuizPlayer({
   const [evalScore, setEvalScore] = useState<number>(0);
 
   const { providerId, modelId, apiKey, baseUrl } = useSettingsStore();
-  const { profile, updateDimensions } = useLearningProfileStore();
-  const { path } = useLearningPathStore();
   const targetSessionId = sessionId ?? null;
 
   const quizzes = useMemo<Quiz[]>(() => {
@@ -118,10 +115,8 @@ export function QuizPlayer({
         body: JSON.stringify({
           attemptId: attemptId.current,
           sessionId: targetSessionId ?? undefined,
-          profile: profile?.dimensions ?? null,
-          goal: path?.goal || title,
-          completedNodes: path?.nodes.filter((node) => node.status === 'completed') ?? [],
-          currentNodeId: path?.nodes.find((node) => node.status === 'in_progress')?.id ?? null,
+          mode: 'quiz',
+          goal: title.slice(0, 500),
           quizResults,
           aiConfig: { providerId, modelId, apiKey, baseUrl },
         }),
@@ -132,57 +127,21 @@ export function QuizPlayer({
         return;
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) {
-        setEvalStatus('idle');
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === 'evaluation_result') {
-              const raw = data.evaluation;
-              const normalized: EvaluationResult = {
-                weakPoints: Array.isArray(raw?.weakPoints) ? raw.weakPoints : [],
-                strongPoints: Array.isArray(raw?.strongPoints) ? raw.strongPoints : [],
-                suggestedFocus: Array.isArray(raw?.suggestedFocus)
-                  ? raw.suggestedFocus
-                  : typeof raw?.suggestedFocus === 'string'
-                    ? [raw.suggestedFocus]
-                    : [],
-                profileUpdate: raw?.profileUpdate ?? null,
-                feedback: typeof raw?.feedback === 'string' ? raw.feedback : '',
-              };
-              setEvaluationResult(normalized);
-              setEvalScore(data.score);
-              if (normalized.profileUpdate) {
-                updateDimensions(normalized.profileUpdate);
-              }
-            }
-          } catch {
-            continue;
-          }
-        }
-      }
-
-      setEvalStatus('done');
+      let evaluated = false;
+      await consumeSSEStream<StreamEvent>(response, {
+        onEvent: ({ metadata }) => {
+          if (metadata.learnEventType !== 'evaluation_result' || !metadata.evaluation) return;
+          const evaluation = metadata.evaluation as EvaluationResult;
+          setEvaluationResult(evaluation);
+          setEvalScore(typeof metadata.score === 'number' ? metadata.score : results.score);
+          evaluated = true;
+        },
+      });
+      setEvalStatus(evaluated ? 'done' : 'idle');
     } catch {
       setEvalStatus('idle');
     }
-  }, [results, quizzes, selectedAnswers, profile, path, targetSessionId, providerId, modelId, apiKey, baseUrl, updateDimensions]);
+  }, [results, quizzes, selectedAnswers, title, targetSessionId, providerId, modelId, apiKey, baseUrl]);
 
   if (quizzes.length === 0) {
     return (

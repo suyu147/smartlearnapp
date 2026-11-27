@@ -1,4 +1,4 @@
-import type { ResourceReference } from './resource';
+import type { ResourceReference, ResourceType } from './resource';
 
 export type PathNodeStatus = 'locked' | 'available' | 'in_progress' | 'completed';
 
@@ -7,6 +7,7 @@ export interface LearningPathNode {
   title: string;
   knowledgePoints: string[];
   resources: ResourceReference[];
+  recommendedTypes?: ResourceType[];
   estimatedMinutes: number;
   prerequisites: string[];
   status: PathNodeStatus;

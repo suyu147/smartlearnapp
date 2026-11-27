@@ -1,116 +1,59 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { compileLearningGraph } from '@/lib/learning-graph/graph';
+import { z } from 'zod';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import { getLearnerProfileService } from '@/lib/deeptutor/services/learner-profile';
 import { createLearnEventWriter } from '@/lib/deeptutor/capabilities/smartlearn/event-mapper';
 import { createStreamEvent } from '@/lib/deeptutor/core/types';
-import type { QuizResultPayload } from '@/lib/learning-graph/types';
-import type { ProfileDimensions } from '@/lib/types/profile';
-import type { LearningPathNode } from '@/lib/types/learning-path';
+import { evaluateNode } from '@/lib/learning-graph/nodes/evaluate';
 import type { LearningStateType } from '@/lib/learning-graph/state';
-import { createLogger } from '@/lib/logger';
-import { validatedBody, errorToMessage, isValidationError, isSyntaxError } from '@/lib/server/validate';
-import { SmartLearnEvaluateSchema } from '@/lib/server/schemas';
 import { createSSEStream } from '@/lib/server/sse-stream';
-
-import { authenticate } from '@/lib/deeptutor/services/auth';
+import { pathRequestSchema, streamLearningPath } from '@/lib/api/server/path-stream';
+import { findPathSession, readGeneratedPath } from '@/lib/api/server/path-generation';
 import prisma from '@/lib/utils/database';
 
-const log = createLogger('api:smartlearn:evaluate');
-
-interface EvaluateRequest {
-  attemptId?: string;
-  sessionId?: string;
-  quizResults: QuizResultPayload[];
-  profile: ProfileDimensions;
-  goal: string;
-  completedNodes: LearningPathNode[];
-  currentNodeId: string | null;
-  currentNodeTitle?: string;
-  aiConfig?: { providerId?: string; modelId?: string; apiKey?: string; baseUrl?: string };
-}
+const schema = pathRequestSchema.pick({
+  attemptId: true, sessionId: true, currentNodeId: true, goal: true, aiConfig: true,
+}).extend({
+  mode: z.enum(['quiz', 'complete-node']).default('quiz'),
+  quizResults: pathRequestSchema.shape.quizResults.unwrap().min(1),
+});
 
 export async function POST(req: NextRequest) {
-  try {
-    const validated = await validatedBody(SmartLearnEvaluateSchema, req);
-    const body = validated as unknown as EvaluateRequest;
-
-    const userId = (await authenticate(req)).id;
-
-    const sessionId = body.sessionId ?? `eval_${Date.now()}`;
-    if (body.sessionId && !await prisma.dtSession.findFirst({ where: { id: body.sessionId, userId, deletedAt: null } })) {
-      return NextResponse.json({ error: 'Learning session not found' }, { status: 404 });
+  return withAuth(req, async (_, { user }) => {
+    const input = schema.safeParse(await req.json().catch(() => null));
+    if (!input.success) return NextResponse.json({ error: '请检查测验请求参数' }, { status: 400 });
+    const body = input.data;
+    if (body.mode === 'complete-node') {
+      const session = body.sessionId ? await findPathSession(user.id, body.sessionId) : null;
+      if (!session) return NextResponse.json({ error: '找不到学习会话' }, { status: 404 });
+      const path = await readGeneratedPath(user.id, session.id);
+      const node = path?.nodes.find(item => item.status === 'in_progress');
+      if (!node || node.id !== body.currentNodeId) {
+        return NextResponse.json({ error: '请传入当前学习节点 ID' }, { status: 409 });
+      }
+      return streamLearningPath(req, user.id, session, path, { ...body, action: 'node_complete' });
     }
-    const turnId = `turn_eval_${Date.now()}`;
+    if (body.sessionId && !await prisma.dtSession.findFirst({
+      where: { id: body.sessionId, userId: user.id, deletedAt: null }, select: { id: true },
+    })) return NextResponse.json({ error: '找不到学习会话' }, { status: 404 });
 
-    log.info(`Evaluate POST: sessionId=${sessionId}, quizResults=${body.quizResults.length}`);
-
-    const initialState: Partial<LearningStateType> = {
-      action: 'node_complete',
-      attemptId: body.attemptId,
-      sessionId,
-      profile: body.profile,
-      goal: body.goal,
-      completedNodes: body.completedNodes ?? [],
-      currentNodeId: body.currentNodeId ?? null,
-      quizResults: body.quizResults,
-      message: '',
-      conversationHistory: [],
-      attachedResources: [],
-      currentNodeTitle: body.currentNodeTitle ?? null,
-      aiConfig: body.aiConfig ?? undefined,
-      resourceFeedback: [],
-      nodeDecisionOverrides: {},
-      currentNode: null,
-      learnerSnapshot: null,
-      resourcePlan: null,
-      generatedResources: [],
-      evaluationResult: null,
-      evaluationScore: null,
-      evaluationFeedback: null,
-      updatedProfile: null,
-      pptScenes: null,
-      phase: '',
-    };
-
-    const graph = compileLearningGraph();
-
-    const stream = createSSEStream('smartlearn:evaluate', sessionId, async (emit) => {
-      const learnEventWriter = createLearnEventWriter(emit, sessionId, turnId, 'smartlearn:evaluate');
-
-      await graph.invoke(initialState as LearningStateType, {
-        configurable: {
-          writer: learnEventWriter,
-          sessionId,
-          turnId,
-          userId,
-        },
+    const source = 'smartlearn:evaluate';
+    const turnId = crypto.randomUUID();
+    const sessionId = body.sessionId ?? turnId;
+    const profile = await getLearnerProfileService().getProfile(user.id);
+    const stream = createSSEStream(source, sessionId, async emit => {
+      const result = await evaluateNode({
+        action: 'quiz_result', attemptId: body.attemptId ?? turnId, sessionId, profile: profile.dimensions,
+        currentNode: null, quizResults: body.quizResults, aiConfig: body.aiConfig,
+      } as LearningStateType, {
+        configurable: { userId: user.id, writer: createLearnEventWriter(emit, sessionId, turnId, source) },
       });
-
-      const doneEvent = createStreamEvent('done', { sessionId, turnId, source: 'smartlearn:evaluate' });
-      emit(doneEvent);
-
-      log.info(`Evaluate stream completed: sessionId=${sessionId}`);
+      if (result.evaluationResult) emit(createStreamEvent('done', { source, sessionId, turnId }));
     });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
-  } catch (err) {
-    if (isValidationError(err) || isSyntaxError(err)) {
-      return NextResponse.json(
-        { success: false, error: errorToMessage(err) },
-        { status: 400 },
-      );
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    log.error('Evaluate POST handler error:', err);
-    return NextResponse.json(
-      { success: false, error: `Internal server error: ${message}` },
-      { status: 500 },
-    );
-  }
+    return new Response(stream, { headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    } });
+  });
 }

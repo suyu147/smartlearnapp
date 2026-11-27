@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import prisma from '@/lib/utils/database';
-import type { Resource } from '@/lib/types/resource';
+import { COURSEWARE_SOURCE, type Resource } from '@/lib/types/resource';
 import { HistoryConflict, ensureHistoryUser } from '@/lib/history/server';
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
 export async function saveResources(userId: string, resources: Resource[]): Promise<Resource[]> {
@@ -16,6 +16,7 @@ export async function saveResources(userId: string, resources: Resource[]): Prom
         const record = await tx.resource.create({ data: { ...data, id: resource.id, userId } });
         saved.push(mapResource(record));
       } else {
+        if (existing.sourceAgent === COURSEWARE_SOURCE) throw new HistoryConflict();
         const changed = await tx.resource.updateMany({ where: { id: resource.id, userId, deletedAt: null, revision: resource.revision ?? 0 }, data: { ...data, revision: { increment: 1 } } });
         if (!changed.count) throw new HistoryConflict();
         if (existing.sessionId) {
@@ -29,17 +30,19 @@ export async function saveResources(userId: string, resources: Resource[]): Prom
   });
 }
 export async function loadResources(userId: string, sessionId?: string | null): Promise<Resource[]> {
-  const records = await prisma.resource.findMany({ where: { userId, deletedAt: null, ...(sessionId !== undefined ? { sessionId } : {}), OR: [{ sessionId: null }, { session: { deletedAt: null } }] }, orderBy: { createdAt: 'desc' } });
+  const records = await prisma.resource.findMany({ where: { userId, deletedAt: null, sourceAgent: { not: COURSEWARE_SOURCE }, ...(sessionId !== undefined ? { sessionId } : {}), OR: [{ sessionId: null }, { session: { deletedAt: null } }] }, orderBy: { createdAt: 'desc' } });
   return records.map(mapResource);
 }
 export async function deleteResources(userId: string, ids?: string[]): Promise<number> {
   return prisma.$transaction(async tx => {
-    const where = { userId, deletedAt: null, ...(ids ? { id: { in: ids } } : {}) };
+    const where = { userId, deletedAt: null, sourceAgent: { not: COURSEWARE_SOURCE }, ...(ids ? { id: { in: ids } } : {}) };
     const targets = await tx.resource.findMany({ where, select: { id: true, sessionId: true } });
-    const result = await tx.resource.updateMany({ where, data: { deletedAt: new Date(), revision: { increment: 1 } } });
+    const targetIds = targets.map(resource => resource.id);
     const sessionIds = [...new Set(targets.flatMap(r => r.sessionId ? [r.sessionId] : []))];
     await tx.dtSession.updateMany({ where: { userId, id: { in: sessionIds }, deletedAt: null }, data: { revision: { increment: 1 } } });
-    const deleted = new Set(targets.map(r => r.id));
+    const result = await tx.resource.updateMany({ where: { ...where, id: { in: targetIds } }, data: { deletedAt: new Date(), revision: { increment: 1 } } });
+    const deleted = new Set(targetIds);
+    await tx.pathNodeResource.deleteMany({ where: { resourceId: { in: targetIds } } });
     const paths = await tx.learningPath.findMany({ where: { userId, sessionId: { in: sessionIds }, deletedAt: null } });
     for (const path of paths) {
       const nodes = (path.nodes as unknown as Array<{ resources?: Array<{ resourceId: string }> }>).map(node => ({ ...node, resources: node.resources?.filter(r => !deleted.has(r.resourceId)) ?? [] }));

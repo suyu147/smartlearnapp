@@ -1,111 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { compileLearningGraph } from '@/lib/learning-graph/graph';
-import { createLearnEventWriter } from '@/lib/deeptutor/capabilities/smartlearn/event-mapper';
-import { createStreamEvent } from '@/lib/deeptutor/core/types';
-import type { LearnRequest } from '@/lib/learning-graph/types';
-import type { LearningStateType } from '@/lib/learning-graph/state';
-import { createLogger } from '@/lib/logger';
-import { validatedBody, errorToMessage, isValidationError, isSyntaxError } from '@/lib/server/validate';
-import { SmartLearnRequestSchema } from '@/lib/server/schemas';
-import { createSSEStream } from '@/lib/server/sse-stream';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import { createPathSession, findPathSession, readGeneratedPath } from '@/lib/api/server/path-generation';
+import { streamLearningPath, pathRequestSchema } from '@/lib/api/server/path-stream';
 
-import { authenticate } from '@/lib/deeptutor/services/auth';
-import prisma from '@/lib/utils/database';
-import { getLearnerProfileService } from '@/lib/deeptutor/services/learner-profile';
-
-const log = createLogger('api:smartlearn');
-
-export async function GET(_req: NextRequest) {
-  return NextResponse.json({ success: true, data: [] });
+export async function GET(req: NextRequest) {
+  return withAuth(req, async (_, { user }) => {
+    const sessionId = req.nextUrl.searchParams.get('sessionId');
+    if (!sessionId) return NextResponse.json({ error: '缺少学习会话 ID' }, { status: 400 });
+    const session = await findPathSession(user.id, sessionId, true);
+    if (!session) return NextResponse.json({ error: '找不到学习会话' }, { status: 404 });
+    const path = await readGeneratedPath(user.id, sessionId);
+    return NextResponse.json({ success: true, data: { sessionId, path } });
+  });
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const validated = await validatedBody(SmartLearnRequestSchema, req);
-    const body = validated as unknown as LearnRequest;
-
-    const userId = (await authenticate(req)).id;
-    const storedProfile = await getLearnerProfileService().getProfile(userId);
-
-    const sessionId = body.sessionId;
-    if (body.sessionId && !await prisma.dtSession.findFirst({ where: { id: body.sessionId, userId, deletedAt: null } })) {
-      return NextResponse.json({ error: 'Learning session not found' }, { status: 404 });
+  return withAuth(req, async (_, { user }) => {
+    const input = pathRequestSchema.safeParse(await req.json().catch(() => null));
+    if (!input.success) return NextResponse.json({ error: '请检查路径请求参数' }, { status: 400 });
+    const body = input.data;
+    if (!body.sessionId && (body.action !== 'start' || !body.goal)) {
+      return NextResponse.json({ error: '创建路径需要学习目标，继续路径需要会话 ID' }, { status: 400 });
     }
-    const turnId = `turn_${Date.now()}`;
-
-    log.info(`SmartLearn POST: sessionId=${sessionId}, action=${body.action}`);
-
-    const initialState: Partial<LearningStateType> = {
-      action: body.action,
-      sessionId,
-      profile: storedProfile.isNew ? (body.profile ?? storedProfile.dimensions) : storedProfile.dimensions,
-      goal: body.goal,
-      completedNodes: body.completedNodes ?? [],
-      currentNodeId: body.currentNodeId ?? null,
-      quizResults: body.quizResults ?? [],
-      message: body.message ?? '',
-      conversationHistory: body.conversationHistory ?? [],
-      attachedResources: body.attachedResources ?? [],
-      currentNodeTitle: body.currentNodeTitle ?? null,
-      aiConfig: body.aiConfig ?? undefined,
-      resourceFeedback: body.resourceFeedback ?? [],
-      nodeDecisionOverrides: body.nodeDecisionOverrides ?? {},
-      generatePptImages: body.generatePptImages ?? false,
-      pptMaxPages: body.pptMaxPages,
-      enablePptInteractive: body.enablePptInteractive ?? true,
-      enablePptQuiz: body.enablePptQuiz ?? true,
-      currentNode: null,
-      learnerSnapshot: null,
-      resourcePlan: null,
-      generatedResources: [],
-      evaluationResult: null,
-      evaluationScore: null,
-      evaluationFeedback: null,
-      updatedProfile: null,
-      pptScenes: null,
-      phase: '',
-    };
-
-    const graph = compileLearningGraph();
-
-    const stream = createSSEStream('smartlearn', sessionId, async (emit) => {
-      const learnEventWriter = createLearnEventWriter(emit, sessionId, turnId, 'smartlearn');
-
-      await graph.invoke(initialState as LearningStateType, {
-        configurable: {
-          writer: learnEventWriter,
-          sessionId,
-          turnId,
-          userId,
-        },
-      });
-
-      const doneEvent = createStreamEvent('done', { sessionId, turnId, source: 'smartlearn' });
-      emit(doneEvent);
-
-      log.info(`SmartLearn stream completed: sessionId=${sessionId}`);
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
-  } catch (err) {
-    if (isValidationError(err) || isSyntaxError(err)) {
-      return NextResponse.json(
-        { success: false, error: errorToMessage(err) },
-        { status: 400 },
-      );
+    const session = body.sessionId
+      ? await findPathSession(user.id, body.sessionId)
+      : await createPathSession(user.id, body.goal!);
+    if (!session) return NextResponse.json({ error: '找不到学习会话' }, { status: 404 });
+    const path = await readGeneratedPath(user.id, session.id);
+    if (body.action === 'node_complete' || (body.action === 'start' && body.currentNodeId)) {
+      const active = path?.nodes.find(node => node.status === 'in_progress');
+      if (!active || body.currentNodeId !== active.id) {
+        return NextResponse.json({ error: '请传入当前学习节点 ID' }, { status: 409 });
+      }
     }
-    const message = err instanceof Error ? err.message : String(err);
-    log.error('SmartLearn POST handler error:', err);
-    return NextResponse.json(
-      { success: false, error: `Internal server error: ${message}` },
-      { status: 500 },
-    );
-  }
+    return streamLearningPath(req, user.id, session, path, body);
+  });
 }

@@ -394,8 +394,12 @@ export default function ResourcesPage() {
           type: res.type,
           title: res.title,
           content: res.content,
-          metadata: res.metadata as Resource['metadata'],
-          sourceAgent: type,
+          metadata: {
+            ...res.metadata,
+            origin: entry.resource.metadata?.origin,
+            nodeId: entry.resource.metadata?.nodeId,
+          },
+          sourceAgent: entry.resource.sourceAgent,
           status: 'ready',
           createdAt: new Date().toISOString(),
         };
@@ -531,6 +535,9 @@ export default function ResourcesPage() {
                           <span className="text-[11px] text-[var(--muted-foreground)]">
                             {card.title}
                           </span>
+                          {entry.resource.metadata?.origin === 'learning-path' && (
+                            <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] text-accent-foreground">来自学习路径</span>
+                          )}
                           {entry.isLoading && (
                             <span className="inline-flex items-center gap-1 text-[10px] text-blue-600">
                               <Loader2 className="h-2.5 w-2.5 animate-spin" />
@@ -626,7 +633,7 @@ export default function ResourcesPage() {
                   ) : activeEntry.resource.sourceAgent === 'resource-ppt' ? (
                     <div className="p-5"><StandardPptViewer key={activeEntry.resource.id} resource={activeEntry.resource} /></div>
                   ) : (
-                    <ResourceViewer resource={activeEntry.resource} />
+                    <ResourceViewer key={activeEntry.resource.id} resource={activeEntry.resource} />
                   )
                 ) : (
                   <div className="flex h-[400px] flex-col items-center justify-center gap-2 text-center">

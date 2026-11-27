@@ -22,6 +22,7 @@ export const LearningState = Annotation.Root({
   aiConfig: Annotation<NonNullable<LearnRequest['aiConfig']> | undefined>(),
   resourceFeedback: Annotation<PriorNodeFeedback[]>(),
   nodeDecisionOverrides: Annotation<Record<string, ResourceType[]>>(),
+  retryResourceType: Annotation<ResourceType | undefined>(),
   generatePptImages: Annotation<boolean>(),
   pptMaxPages: Annotation<number | undefined>(),
   enablePptInteractive: Annotation<boolean>(),

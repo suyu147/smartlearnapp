@@ -3,6 +3,14 @@ import type { StandardPptDeck } from '@/lib/types/standard-ppt';
 export type ResourceType = 'document' | 'mindmap' | 'quiz' | 'video' | 'code' | 'reading' | 'ppt';
 
 export const ALL_RESOURCE_TYPES: ResourceType[] = ['document', 'mindmap', 'quiz', 'video', 'code', 'reading', 'ppt'];
+export const COURSEWARE_SOURCE = 'smartlearn-courseware';
+
+export interface CoursewareOptions {
+  maxPages?: number;
+  generateImages: boolean;
+  includeInteractive: boolean;
+  includeQuiz: boolean;
+}
 
 export type ResourceStatus = 'generating' | 'ready' | 'failed';
 
@@ -105,6 +113,10 @@ export interface Resource {
     error?: boolean;
     videoData?: VideoSearchResult;
     pptData?: import('@/lib/types/stage').Scene[];
+    coursewareData?: import('@/lib/types/stage').Scene[];
+    options?: CoursewareOptions;
+    origin?: 'learning-path';
+    nodeId?: string;
     standardPptData?: StandardPptDeck;
     structuredDocument?: StructuredDocument;
     structuredReading?: StructuredReading;
@@ -140,7 +152,7 @@ export const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
   video: '教学视频',
   code: '代码案例',
   reading: '拓展阅读',
-  ppt: '动态课件',
+  ppt: 'PPT',
 };
 
 export const RESOURCE_TYPE_ICONS: Record<ResourceType, string> = {

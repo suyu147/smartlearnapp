@@ -24,6 +24,7 @@ export interface StandardPptGenerationOptions {
     providerId?: string;
     modelId?: string;
     apiKey?: string;
+    baseUrl?: string;
   };
 }
 
@@ -70,7 +71,9 @@ function resolvePptModel(aiConfig: StandardPptGenerationOptions['aiConfig']) {
     providerId: aiConfig?.providerId as ProviderId | undefined,
     modelId: aiConfig?.modelId,
     apiKey: aiConfig?.apiKey,
-    baseUrl: !aiConfig?.providerId || aiConfig.providerId === process.env.AI_PROVIDER ? process.env.AI_BASE_URL : undefined,
+    baseUrl: aiConfig?.baseUrl ?? (
+      !aiConfig?.providerId || aiConfig.providerId === process.env.AI_PROVIDER ? process.env.AI_BASE_URL : undefined
+    ),
   }).model;
 }
 
