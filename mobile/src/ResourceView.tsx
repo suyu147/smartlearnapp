@@ -21,7 +21,7 @@ function readDocument(resource: Resource): NonNullable<Resource['metadata']>['st
   }
 }
 
-export default function ResourceView({ resource, token }: { resource: Resource; token: string }) {
+export default function ResourceView({ resource, token, onRead }: { resource: Resource; token: string; onRead?: () => void }) {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const metadata = resource.metadata;
@@ -95,5 +95,6 @@ export default function ResourceView({ resource, token }: { resource: Resource; 
       {/^\s*(?:\x60{3}|~{3})/.test(resource.content) ? <MarkdownContent content={resource.content} unwrap={false} /> :
         <CodeContent content={resource.content} />}
     </Card> : null}
+    {onRead ? <Button label="标记已读并返回" action={onRead} /> : null}
   </>;
 }

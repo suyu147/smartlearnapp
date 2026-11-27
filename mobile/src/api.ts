@@ -1,4 +1,5 @@
 import { fetch } from 'expo/fetch';
+import type { LearningPath, Resource, ResourceType } from './types';
 
 const base = (process.env.EXPO_PUBLIC_API_URL ?? '').trim().replace(/\/+$/, '');
 
@@ -41,7 +42,15 @@ export type StreamEvent = {
   stage?: string;
   sessionId?: string;
   content?: string;
-  metadata?: { learnEventType?: string; resourceType?: string; message?: string };
+  metadata?: {
+    learnEventType?: string;
+    resourceType?: ResourceType;
+    status?: 'running' | 'completed' | 'failed';
+    message?: string;
+    resource?: Resource;
+    practice?: Resource;
+    path?: LearningPath;
+  };
 };
 
 export async function stream(

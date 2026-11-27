@@ -10,6 +10,7 @@ import { smartLearnAiConfig } from '@/lib/server/smartlearn-input';
 import type { LearningPath } from '@/lib/types/learning-path';
 import { ALL_RESOURCE_TYPES, type ResourceType } from '@/lib/types/resource';
 import { isMobilePath, persistNodeRecommendation, persistNodeResource, persistPlannedNode, readGeneratedPath } from './path-generation';
+import { mobileResource } from '@/lib/mobile/resources';
 
 const resourceType = z.enum(ALL_RESOURCE_TYPES as [ResourceType, ...ResourceType[]]);
 const identifier = z.string().min(1).max(128);
@@ -70,7 +71,18 @@ export async function streamLearningPath(
     const mobilePath = isMobilePath(session);
     const writeEvent = createLearnEventWriter(emit, sessionId, turnId, source);
     const write: typeof writeEvent = event => {
-      if (mobilePath && event.type === 'resource_delta' && event.resource.type === 'quiz') return;
+      if (mobilePath && event.type === 'resource_delta') {
+        const resource = mobileResource(event.resource);
+        if (!resource) return;
+        if (resource.type === 'quiz') {
+          emit(createStreamEvent('result', {
+            source, sessionId, turnId, metadata: { learnEventType: 'practice_ready', practice: resource },
+          }));
+          return;
+        }
+        writeEvent({ ...event, resource });
+        return;
+      }
       writeEvent(event);
     };
     const active = path?.nodes.find(node => node.status === 'in_progress');

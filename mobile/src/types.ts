@@ -37,7 +37,14 @@ export type Node = {
   recommendedTypes?: ResourceType[];
   resources: { resourceId: string; type: ResourceType; title: string }[];
 };
-export type LearningPath = { goal: string; nodes: Node[] };
+export type LearningPath = { goal: string; revision?: number; nodes: Node[] };
+export type Resume = {
+  sessionId: string;
+  nodeId: string;
+  document?: { id: string };
+  quiz?: { id: string; revision: number };
+  attemptId: string | null;
+};
 export type PathSummary = {
   sessionId: string; goal: string; status: string; updatedAt: string;
   currentNode: { id: string; title: string } | null; completedCount: number;
@@ -50,9 +57,17 @@ export type Practice = {
 };
 export type Report = {
   attemptId: string; pathSessionId: string; nodeId: string; resourceId: string;
+  version: number; kind: 'practice' | 'review';
   title: string; total: number; correctCount: number; score: number;
   focusTopics: string[];
   answers: { id: string; question: string; topic: string; userAnswer: string; correctAnswer: string; correct: boolean; explanation?: string }[];
 };
+export type ReviewTarget = { version: number } & ({ reportId: string } | { questionId: string });
+export type ReviewMode = 'mistakes' | 'today';
+export type ReviewItem = {
+  resourceId: string; version: number; questionId: string; title: string; topic: string; question: string;
+  mistakeCount: number; lastAnsweredAt: string; lastWrongAttemptId: string; pending: boolean; canReview: boolean;
+};
+export type ReviewList = { items: ReviewItem[]; total: number; topics: string[]; nextOffset: number | null };
 export type Chat = { id: string; title: string };
 export type Message = { id: number; role: string; content: string };

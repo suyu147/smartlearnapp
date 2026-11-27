@@ -13,6 +13,8 @@ import { GET as listMobileResources } from '@/app/api/v1/mobile/resources/route'
 import { GET as getPractice } from '@/app/api/v1/mobile/practice/[resourceId]/route';
 import { POST as submitPractice } from '@/app/api/v1/mobile/practice/[resourceId]/attempts/route';
 import { GET as getReport } from '@/app/api/v1/mobile/practice/attempts/[attemptId]/route';
+import { GET as listReview } from '@/app/api/v1/mobile/review/route';
+import { GET as getReview, POST as submitReview } from '@/app/api/v1/mobile/review/[resourceId]/route';
 import { DEFAULT_DIMENSIONS } from '@/lib/types/profile';
 import type { StreamEvent } from '@/lib/deeptutor/core/types';
 
@@ -151,18 +153,48 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
       prerequisites: [], estimatedMinutes: 20, status: 'in_progress',
     };
     mocks.plan.mockResolvedValueOnce({ currentNode: mobileNode });
-    mocks.generate.mockImplementation(async (type: string) => ({
-      title: type,
-      content: type === 'quiz' ? JSON.stringify([{
+    let finishQuiz!: () => void;
+    const quizPending = new Promise<void>(resolve => { finishQuiz = resolve; });
+    mocks.generate.mockImplementation(async (type: string) => {
+      if (type === 'quiz') await quizPending;
+      return { title: type, content: type === 'quiz' ? JSON.stringify([{
         type: 'choice', question: '哪项为常数时间？', options: ['按索引读数组', '遍历数组'],
         answer: '按索引读数组', explanation: '索引直接定位。', knowledgePoints: ['算法概览'],
-      }]) : '讲解',
-    }));
-    const events = await streamed(await startPath(request('smartlearn', 'POST', {
+      }]) : '讲解' };
+    });
+    const response = await startPath(request('smartlearn', 'POST', {
       action: 'start', client: 'mobile', goal: '学算法',
-    })));
+    }));
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    const events: StreamEvent[] = [];
+    async function readEvent() {
+      const chunk = await reader.read();
+      if (chunk.done) return false;
+      const line = decoder.decode(chunk.value);
+      if (line.startsWith('data: ')) events.push(JSON.parse(line.slice(6)));
+      return true;
+    }
+    try {
+      while (!events.some(event => event.metadata.learnEventType === 'resource_delta' &&
+        (event.metadata.resource as { type?: string })?.type === 'document') && await readEvent()) {
+        if (events.at(-1)?.type === 'error') throw new Error(events.at(-1)?.content);
+      }
+      expect(eventNames(events)).toContain('path_update');
+      expect(eventNames(events)).not.toContain('practice_ready');
+      expect(eventNames(events)).not.toContain('done');
+      const earlySessionId = events[0].sessionId;
+      const resources = (await (await listMobileResources(request('mobile/resources?sessionId=' + earlySessionId))).json()).data.resources;
+      expect(resources).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'document', content: '讲解' })]));
+    } finally {
+      finishQuiz();
+      while (await readEvent()) { /* Drain the remaining resource events. */ }
+      reader.releaseLock();
+    }
     const sessionId = events[0].sessionId;
     expect(events.some(event => (event.metadata.resource as { type?: string } | undefined)?.type === 'quiz')).toBe(false);
+    expect(events.find(event => event.metadata.learnEventType === 'practice_ready')?.metadata.practice)
+      .toMatchObject({ type: 'quiz', content: '', metadata: { nodeId: mobileNode.id } });
 
     const paths = (await (await listMobilePaths(request('mobile/learning-paths'))).json()).data.items;
     expect(paths).toEqual([expect.objectContaining({ sessionId, currentNode: { id: mobileNode.id, title: mobileNode.title } })]);
@@ -174,6 +206,8 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
       expect.objectContaining({ type: 'quiz', metadata: expect.objectContaining({ origin: 'learning-path', nodeId: mobileNode.id }) }),
     ]));
     const resourceId = web.find((resource: { type: string }) => resource.type === 'quiz').id;
+    const resume = async () => (await (await listMobilePaths(request('mobile/learning-paths?resume=1'))).json()).data.resume;
+    expect(await resume()).toMatchObject({ sessionId, nodeId: mobileNode.id, quiz: { id: resourceId, revision: 1 }, attemptId: null });
     const mobile = (await (await listMobileResources(request('mobile/resources?sessionId=' + sessionId))).json()).data.resources;
     expect(mobile.find((resource: { id: string }) => resource.id === resourceId).content).toBe('');
     const quizParams = { params: Promise.resolve({ resourceId }) };
@@ -194,6 +228,7 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
     const reportParams = { params: Promise.resolve({ attemptId }) };
     const report = (await (await getReport(request('mobile/practice/attempts'), reportParams)).json()).data;
     expect(report).toMatchObject({ attemptId, score: 100, correctCount: 1, total: 1 });
+    expect(await resume()).toMatchObject({ attemptId });
     expect((await getReport(request('mobile/practice/attempts', 'GET', undefined, other), reportParams)).status).toBe(404);
     expect(await prisma.learningSkillMastery.findUnique({ where: { userId_topic: { userId: owner, topic: '算法概览' } } })).toMatchObject({ reviewCount: 1 });
 
@@ -202,5 +237,97 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
     const updated = (await (await getPath(request('smartlearn?sessionId=' + sessionId))).json()).data.path;
     expect(updated.nodes.map((node: { status: string }) => node.status)).toEqual(['completed', 'in_progress']);
     expect(await prisma.learningSkillMastery.findUnique({ where: { userId_topic: { userId: owner, topic: '算法概览' } } })).toMatchObject({ reviewCount: 1 });
+  });
+
+  it('retries only wrong questions and refreshes review queues without overwriting the original report', async () => {
+    const nodeId = 'review-node';
+    const session = await prisma.dtSession.create({
+      data: { userId: owner, title: '错题复习', mode: 'learning-path', metadata: { client: 'mobile' } },
+    });
+    const path = await prisma.learningPath.create({
+      data: { userId: owner, sessionId: session.id, goal: '跟踪错题', nodes: [], edges: [] },
+    });
+    const resource = await prisma.resource.create({
+      data: {
+        userId: owner, sessionId: session.id, type: 'quiz', status: 'ready', title: '错题复习', sourceAgent: 'fixture',
+        content: JSON.stringify([
+          { type: 'choice', question: '一个变量如何声明？', options: ['let', 'return'], answer: 'let', knowledgePoints: ['变量声明'] },
+          { type: 'fill', question: '数组第一个索引是？', answer: '0', knowledgePoints: ['数组索引'] },
+          { type: 'fill', question: '布尔真值如何表示？', answer: 'true', knowledgePoints: ['布尔表达式'] },
+        ]),
+        pathNodes: { create: { pathId: path.id, nodeId } },
+      },
+    });
+    const resourceId = resource.id;
+    const version = resource.revision;
+    const params = { params: Promise.resolve({ resourceId }) };
+    const attemptId = crypto.randomUUID();
+    const original = await submitPractice(request('mobile/practice', 'POST', {
+      attemptId, version, answers: { '1': 'return', '2': '1', '3': 'true' },
+    }), params);
+    expect(original.status).toBe(200);
+    const originalReport = (await original.json()).data;
+    expect(originalReport).toMatchObject({ kind: 'practice', total: 3, correctCount: 1, score: 33 });
+
+    const mistakes = async (query = '', user = owner) => (await (await listReview(request('mobile/review?' + query, 'GET', undefined, user))).json()).data;
+    const itemsForResource = (data: { items: { resourceId: string }[] }) => data.items.filter(item => item.resourceId === resourceId);
+    expect(itemsForResource(await mistakes())).toEqual(expect.arrayContaining([
+      expect.objectContaining({ questionId: '1', mistakeCount: 1, canReview: true }),
+      expect.objectContaining({ questionId: '2', mistakeCount: 1, canReview: true }),
+    ]));
+    expect(itemsForResource(await mistakes('topic=' + encodeURIComponent('数组索引')))).toHaveLength(1);
+    expect((await mistakes('', other)).items).toEqual([]);
+
+    const reportReview = 'mobile/review?reportId=' + attemptId;
+    const getSelection = (suffix: string, user = owner) => getReview(request(suffix + '&version=' + version, 'GET', undefined, user), params);
+    expect((await getSelection(reportReview, other)).status).toBe(404);
+    const selected = (await (await getSelection(reportReview)).json()).data.questions;
+    expect(selected).toEqual([
+      { id: '1', type: 'choice', question: '一个变量如何声明？', options: ['let', 'return'] },
+      { id: '2', type: 'fill', question: '数组第一个索引是？' },
+    ]);
+    expect((await getSelection('mobile/review?questionId=3')).status).toBe(404);
+
+    const retryId = crypto.randomUUID();
+    const body = { attemptId: retryId, version, answers: { '1': 'let', '2': '2' } };
+    const send = () => submitReview(request(reportReview, 'POST', body), params);
+    expect((await submitReview(request(reportReview, 'POST', body, other), params)).status).toBe(404);
+    expect((await submitReview(request(reportReview, 'POST', { ...body, answers: { '1': 'let' } }), params)).status).toBe(400);
+    const [first, retry] = await Promise.all([send(), send()]);
+    expect(first.status).toBe(200);
+    const result = await first.json();
+    expect(result).toEqual(await retry.json());
+    expect(result.data).toMatchObject({ attemptId: retryId, kind: 'review', total: 2, correctCount: 1, score: 50 });
+    expect(itemsForResource(await mistakes())).toEqual([expect.objectContaining({ questionId: '2', mistakeCount: 2 })]);
+    expect(await prisma.learningSkillMastery.findUnique({
+      where: { userId_topic: { userId: owner, topic: '变量声明' } },
+    })).toMatchObject({ reviewCount: 2 });
+    const latest = (await (await getPractice(request('mobile/practice'), params)).json()).data;
+    expect(latest.latestAttemptId).toBe(attemptId);
+    const lookup = (id: string) => getReport(request('mobile/practice/attempts'), { params: Promise.resolve({ attemptId: id }) });
+    expect((await (await lookup(attemptId)).json()).data).toEqual(originalReport);
+    expect((await (await lookup(retryId)).json()).data).toEqual(result.data);
+
+    expect(itemsForResource(await mistakes('mode=today'))).toEqual([expect.objectContaining({ questionId: '2' })]);
+    await prisma.learningSkillMastery.update({
+      where: { userId_topic: { userId: owner, topic: '变量声明' } },
+      data: { nextReviewAt: new Date(Date.now() - 60_000) },
+    });
+    expect(itemsForResource(await mistakes('mode=today&tzOffset=-480'))).toMatchObject([
+      { questionId: '2', pending: true }, { questionId: '1', pending: false },
+    ]);
+    const single = await submitReview(request('mobile/review?questionId=1', 'POST', {
+      attemptId: crypto.randomUUID(), version, answers: { '1': 'let' },
+    }), params);
+    expect(single.status).toBe(200);
+    expect(itemsForResource(await mistakes('mode=today'))).toEqual([expect.objectContaining({ questionId: '2' })]);
+
+    await prisma.resource.update({ where: { id: resourceId }, data: { revision: { increment: 1 } } });
+    expect((await getSelection(reportReview)).status).toBe(409);
+    expect((await submitReview(request(reportReview, 'POST', { ...body, attemptId: crypto.randomUUID() }), params)).status).toBe(409);
+    expect(await (await send()).json()).toEqual(result);
+    expect(itemsForResource(await mistakes())).toEqual([expect.objectContaining({ questionId: '2', canReview: false })]);
+    expect(itemsForResource(await mistakes('mode=today'))).toEqual([]);
+    expect((await (await lookup(attemptId)).json()).data).toEqual(originalReport);
   });
 });

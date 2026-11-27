@@ -77,7 +77,10 @@ export async function generateResourcesNode(
     updatedAt: now,
   };
 
-  if (persistence && state.action !== 'generate_resources') path = await persistence.saveNode(path);
+  if (persistence && state.action !== 'generate_resources') {
+    path = await persistence.saveNode(path);
+    if (state.mobilePath) write({ type: 'path_update', path });
+  }
   if (persistence && regenerating && !state.retryResourceType && (override || !node.recommendedTypes)) {
     await persistence.saveRecommendation(node.id, types);
   }
