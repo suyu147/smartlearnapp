@@ -9,8 +9,9 @@ import { createSSEStream } from '@/lib/server/sse-stream';
 import { smartLearnAiConfig } from '@/lib/server/smartlearn-input';
 import type { LearningPath } from '@/lib/types/learning-path';
 import { ALL_RESOURCE_TYPES, type ResourceType } from '@/lib/types/resource';
-import { isMobilePath, persistNodeRecommendation, persistNodeResource, persistPlannedNode, readGeneratedPath } from './path-generation';
+import { isMobilePath, isStagedMobilePath, mobilePracticeProgress, persistNodeRecommendation, persistNodeResource, persistPlannedNode, readGeneratedPath, readMobileStagePath, withStageProgress } from './path-generation';
 import { mobileResource } from '@/lib/mobile/resources';
+import { planMobileStages } from '@/lib/mobile/path-planner';
 
 const resourceType = z.enum(ALL_RESOURCE_TYPES as [ResourceType, ...ResourceType[]]);
 const identifier = z.string().min(1).max(128);
@@ -31,8 +32,9 @@ const quizResult = z.object({
 });
 
 export const pathRequestSchema = z.object({
-  action: z.enum(['start', 'node_complete', 'quiz_result', 'tutor_chat']),
+  action: z.enum(['start', 'node_complete', 'quiz_result', 'tutor_chat', 'replan']),
   client: z.literal('mobile').optional(),
+  planMode: z.literal('staged').optional(),
   goal: z.string().trim().min(1).max(500).optional(),
   sessionId: identifier.optional(),
   currentNodeId: identifier.nullable().optional(),
@@ -55,7 +57,7 @@ export const retryResourceSchema = z.object({
 });
 
 type PathInput = Omit<z.infer<typeof pathRequestSchema>, 'action'> & {
-  action: LearningStateType['action'];
+  action: LearningStateType['action'] | 'replan';
   retryResourceType?: ResourceType;
 };
 
@@ -73,7 +75,8 @@ export async function streamLearningPath(
   const turnId = crypto.randomUUID();
   const source = 'smartlearn';
   const mobilePath = isMobilePath(session);
-  const tracked = mobilePath && ['start', 'node_complete', 'generate_resources'].includes(body.action);
+  const staged = isStagedMobilePath(session);
+  const tracked = mobilePath && ['start', 'node_complete', 'generate_resources', 'replan'].includes(body.action);
   const key = JSON.stringify([userId, sessionId]);
   if (tracked && mobileGeneration.has(key)) {
     return Response.json({ error: '这个课节正在生成，请稍后刷新' }, { status: 409 });
@@ -100,7 +103,30 @@ export async function streamLearningPath(
         writeEvent(event);
       };
       const active = path?.nodes.find(node => node.status === 'in_progress');
-      if (body.action === 'start' && active && !body.currentNodeId) {
+      if (body.action === 'replan' || (staged && body.action === 'start' && !path)) {
+        write({ type: 'phase_start', phase: 'plan' });
+        const profile = await getLearnerProfileService().getProfile(userId);
+        const kept = (path?.nodes ?? []).filter(node =>
+          node.status === 'completed' || node.status === 'in_progress' || node.resources.length > 0);
+        const goal = path?.goal ?? session.title;
+        const planned = await planMobileStages({ goal, kept, profile: profile.dimensions, aiConfig: body.aiConfig, signal });
+        const practiced = kept.length ? await mobilePracticeProgress(userId, [sessionId]) : new Set<string>();
+        const keptIds = new Set(kept.map(node => node.id));
+        signal.throwIfAborted();
+        const legacyStage = { id: 'existing', title: '已有学习' };
+        const now = new Date().toISOString();
+        const nodes = [...kept.map(node => ({ ...node, stage: node.stage ?? legacyStage })), ...planned];
+        const nextPath = withStageProgress({
+          id: path?.id ?? sessionId, sessionId, userId, goal, nodes,
+          edges: (path?.edges ?? []).filter(edge => keptIds.has(edge.from) && keptIds.has(edge.to)),
+          status: 'active', estimatedDays: Math.max(1, nodes.length),
+          createdAt: path?.createdAt ?? now, updatedAt: now,
+        }, practiced);
+        const metadata = session.metadata as { client: string } | null;
+        const saved = await persistPlannedNode(userId, nextPath, session.revision, { ...metadata, planMode: 'staged' });
+        write({ type: 'path_update', path: saved });
+        write({ type: 'phase_end', phase: 'plan' });
+      } else if (body.action === 'start' && (staged || (active && !body.currentNodeId))) {
         write({ type: 'path_update', path: path! });
       } else {
         const profile = await getLearnerProfileService().getProfile(userId);
@@ -132,7 +158,7 @@ export async function streamLearningPath(
                 persistNodeResource(userId, sessionId, nodeId, resource),
               saveRecommendation: (nodeId: string, types: ResourceType[]) =>
                 persistNodeRecommendation(userId, sessionId, nodeId, types),
-              readPath: () => readGeneratedPath(userId, sessionId),
+              readPath: () => (staged ? readMobileStagePath : readGeneratedPath)(userId, sessionId),
             },
           },
         });

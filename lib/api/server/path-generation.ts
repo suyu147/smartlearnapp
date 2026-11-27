@@ -4,11 +4,16 @@ import { HistoryConflict, ensureHistoryUser } from '@/lib/history/server';
 import { mapResource } from './resource-persistence';
 import type { LearningPath, LearningPathNode } from '@/lib/types/learning-path';
 import type { Resource, ResourceType } from '@/lib/types/resource';
+import { applyStageProgress } from '@/lib/mobile/path-progress';
 
 export const PATH_SESSION_MODE = 'learning-path';
 
 export function isMobilePath(session: { metadata: unknown }) {
   return (session.metadata as { client?: string } | null)?.client === 'mobile';
+}
+
+export function isStagedMobilePath(session: { metadata: unknown }) {
+  return isMobilePath(session) && (session.metadata as { planMode?: string }).planMode === 'staged';
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
 
@@ -28,10 +33,12 @@ export function findPathSession(userId: string, id: string, includeLegacy = fals
   });
 }
 
-export async function createPathSession(userId: string, goal: string, mobile = false) {
+export async function createPathSession(userId: string, goal: string, mobile = false, staged = false) {
   await ensureHistoryUser(userId);
   return prisma.dtSession.create({
-    data: { userId, title: goal, mode: PATH_SESSION_MODE, ...(mobile ? { metadata: { client: 'mobile' } } : {}) },
+    data: { userId, title: goal, mode: PATH_SESSION_MODE,
+      ...(mobile ? { metadata: { client: 'mobile', ...(staged ? { planMode: 'staged' } : {}) } } : {}),
+    },
   });
 }
 
@@ -42,14 +49,41 @@ export async function readGeneratedPath(userId: string, sessionId: string) {
   return record ? mapPath(record) : null;
 }
 
-export async function persistPlannedNode(userId: string, path: LearningPath, expectedSessionRevision: number) {
+export async function mobilePracticeProgress(userId: string, sessionIds: string[]) {
+  const quizIds = new Set<string>();
+  if (!sessionIds.length) return quizIds;
+  const rows = await prisma.learningMasterySession.findMany({
+    where: { userId, completedAt: { not: null }, AND: [
+      { metadata: { path: ['source'], equals: 'mobile-practice' } },
+      { OR: sessionIds.map(id => ({ metadata: { path: ['sessionId'], equals: id } })) },
+    ] },
+    select: { metadata: true },
+  });
+  for (const row of rows) {
+    const resourceId = (row.metadata as { resourceId?: string } | null)?.resourceId;
+    if (resourceId) quizIds.add(resourceId);
+  }
+  return quizIds;
+}
+
+export function withStageProgress(path: LearningPath, practicedQuizIds: ReadonlySet<string>): LearningPath {
+  const nodes = applyStageProgress(path.nodes, practicedQuizIds);
+  return { ...path, nodes, status: nodes.every(node => node.status === 'completed') ? 'completed' : 'active' };
+}
+
+export async function readMobileStagePath(userId: string, sessionId: string) {
+  const path = await readGeneratedPath(userId, sessionId);
+  return path ? withStageProgress(path, await mobilePracticeProgress(userId, [sessionId])) : null;
+}
+
+export async function persistPlannedNode(userId: string, path: LearningPath, expectedSessionRevision: number, metadata?: Prisma.InputJsonValue) {
   const { sessionId } = path;
   if (!sessionId) throw new HistoryConflict();
   return prisma.$transaction(async tx => {
-    // Reserve the next node against the session revision read before generation.
+    // Keep concurrent path changes from overwriting tasks, progress or resources.
     const changed = await tx.dtSession.updateMany({
       where: { id: sessionId, userId, mode: PATH_SESSION_MODE, deletedAt: null, revision: expectedSessionRevision },
-      data: { revision: { increment: 1 } },
+      data: { revision: { increment: 1 }, metadata },
     });
     if (!changed.count) throw new HistoryConflict('路径已更新，请刷新后重试');
     const data = { goal: path.goal, nodes: json(path.nodes), edges: json(path.edges), status: path.status };

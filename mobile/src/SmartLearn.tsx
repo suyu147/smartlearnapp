@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import * as SecureStore from 'expo-secure-store';
-import { AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError, api, apiUrl, isTemporaryError } from './api';
 import { type Account, type LearningPath, type Node, type PathSummary, type Resource, type ResourceType, type Resume, type ReviewBatch, type ReviewItem, type ReviewMode, type ReviewTarget, type Stats, resourceLabels } from './types';
@@ -12,6 +12,7 @@ import ReviewView from './ReviewView';
 import LearningStatsView from './LearningStatsView';
 import ChatView from './ChatView';
 import { documentProgress, flushSubmissions, getLearning, readBatch, readDraft, saveBatch, saveDraft } from './learning-storage';
+import PathTimeline from './PathTimeline';
 import { usePathGeneration, type Generation } from './usePathGeneration';
 
 const tokenKey = 'smartlearn.account.token';
@@ -36,7 +37,7 @@ const tabs = [
 type Tab = typeof tabs[number]['id'];
 type Screen =
   | { type: 'main' }
-  | { type: 'path'; sessionId: string }
+  | { type: 'path'; sessionId: string; taskId?: string }
   | { type: 'resource'; resource: Resource }
   | { type: 'practice'; resourceId?: string; reportId?: string; review?: ReviewTarget; batch?: ReviewBatch }
   | { type: 'review'; mode: ReviewMode; topic?: string }
@@ -96,9 +97,11 @@ function AuthScreen({ onLogin }: { onLogin: (token: string, account: Account, ha
 }
 
 function PathCard({ item, open }: { item: PathSummary; open: () => void }) {
-  return <Card><Row title={item.goal} detail={item.currentNode?.title ?? (item.status === 'pending' ? '继续生成第一节' : '查看课节')}
+  return <Card><Row title={item.goal} detail={item.currentNode?.title ?? (item.status === 'pending' ? '继续规划学习路径' : '查看学习路径')}
     icon="book-open" onPress={open} />
-    <Text style={styles.detail}>已完成 {item.completedCount} 节{item.nodeCount > 0 ? ` · 已生成 ${item.nodeCount} 节` : ''}</Text>
+    <Text style={styles.detail}>{item.staged && item.nodeCount > 0
+      ? `已完成 ${item.completedCount} / ${item.nodeCount} 个任务`
+      : `已完成 ${item.completedCount} 节${item.nodeCount > 0 ? ` · 已生成 ${item.nodeCount} 节` : ''}`}</Text>
   </Card>;
 }
 
@@ -106,15 +109,15 @@ function ResourceRow({ resource, open }: { resource: Resource; open: () => void 
   return <Row title={resource.title} detail={resourceLabels[resource.type]} icon={resourceIcons[resource.type]} onPress={open} />;
 }
 
-function PathView({ sessionId, accountId, token, generation, anotherPathRunning, run, onResource, onChat, onAuthError, onPractice }: {
+function PathView({ sessionId, taskId, accountId, token, generation, anotherPathRunning, syncRevision, run, onTask, onResource, onChat, onAuthError, onPractice }: {
   sessionId: string; accountId: string; token: string; generation?: Generation; run: ReturnType<typeof usePathGeneration>['run'];
-  anotherPathRunning: boolean;
+  taskId?: string; anotherPathRunning: boolean; syncRevision: number; onTask: (node: Node) => void;
   onResource: (resource: Resource) => void; onChat: (node: Node) => void; onAuthError: () => void;
   onPractice: (resourceId: string, reportId?: string) => void;
 }) {
   const [savedPath, setSavedPath] = useState<LearningPath | null>(null);
   const [resources, setResources] = useState<Resource[]>([]);
-  const [selectedNode, setSelectedNode] = useState('');
+  const [staged, setStaged] = useState(false);
   const [lastReport, setLastReport] = useState<{ quizId: string; attemptId: string }>();
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
@@ -125,8 +128,8 @@ function PathView({ sessionId, accountId, token, generation, anotherPathRunning,
   const generationDisabled = busy || remoteRunning || anotherPathRunning;
   const streamedPath = generation?.path;
   const path = streamedPath && (!savedPath || (streamedPath.revision ?? 0) > (savedPath.revision ?? 0)) ? streamedPath : savedPath;
-  const node = path?.nodes.find(item => item.id === selectedNode) ??
-    path?.nodes.find(item => item.status === 'in_progress') ?? path?.nodes.at(-1);
+  const isStaged = staged || !!path?.nodes.some(item => item.stage);
+  const node = taskId ? path?.nodes.find(item => item.id === taskId) : undefined;
   const live = busy || !loaded || (streamedPath?.revision ?? 0) > (savedPath?.revision ?? 0) ? generation?.resources ?? [] : [];
   const quizId = node?.resources.find(link => link.type === 'quiz')?.resourceId ??
     live.find(resource => resource.type === 'quiz' && resource.metadata?.nodeId === node?.id)?.id;
@@ -145,7 +148,7 @@ function PathView({ sessionId, accountId, token, generation, anotherPathRunning,
       active = request;
       const encoded = encodeURIComponent(sessionId);
       const [detail, assets] = await Promise.allSettled([
-        getLearning<{ path: LearningPath | null; generating?: boolean }>(accountId, '/smartlearn?sessionId=' + encoded, token, request.signal),
+        getLearning<{ path: LearningPath | null; staged?: boolean; generating?: boolean }>(accountId, '/smartlearn?sessionId=' + encoded, token, request.signal),
         getLearning<{ resources: Resource[] }>(accountId, '/mobile/resources?sessionId=' + encoded, token, request.signal),
       ]);
       if (request.signal.aborted) return;
@@ -153,6 +156,7 @@ function PathView({ sessionId, accountId, token, generation, anotherPathRunning,
       if (detail.status === 'fulfilled') {
         setSavedPath(previous => detail.value.offline && previous &&
           (previous.revision ?? 0) > (detail.value.data.path?.revision ?? 0) ? previous : detail.value.data.path);
+        setStaged(!!detail.value.data.staged);
         setLoaded(true);
         if (!detail.value.offline) setRemoteRunning(!!detail.value.data.generating);
       }
@@ -165,7 +169,7 @@ function PathView({ sessionId, accountId, token, generation, anotherPathRunning,
     const timer = remoteRunning && !busy ? setInterval(() => { if (AppState.currentState === 'active') void load(); }, 6000) : undefined;
     const foreground = AppState.addEventListener('change', state => { if (state === 'active') void load(); });
     return () => { active?.abort(); clearInterval(timer); foreground.remove(); };
-  }, [sessionId, accountId, token, fail, busy, remoteRunning, reload]);
+  }, [sessionId, accountId, token, fail, busy, remoteRunning, reload, syncRevision]);
 
   useEffect(() => {
     if (!quizId) return;
@@ -176,14 +180,27 @@ function PathView({ sessionId, accountId, token, generation, anotherPathRunning,
       })
       .catch(cause => { if (!request.signal.aborted) fail(cause); });
     return () => request.abort();
-  }, [quizId, accountId, token, fail, reload]);
+  }, [quizId, accountId, token, fail, reload, syncRevision]);
 
   function generate(type?: ResourceType, advance = false) {
     setError('');
-    if (advance) setSelectedNode('');
     const body = type ? { sessionId, currentNodeId: node?.id, resourceType: type } :
       { sessionId, action: advance ? 'node_complete' : 'start', ...(advance ? { currentNodeId: node?.id } : {}) };
     void run(type ? '/smartlearn/resources' : '/smartlearn', body, sessionId);
+  }
+
+  function openTask(task: Node) {
+    if (isStaged && task.status === 'available' && !offline && !generationDisabled) {
+      void run('/smartlearn/resources', { sessionId, currentNodeId: task.id }, sessionId);
+    }
+    onTask(task);
+  }
+
+  function replan() {
+    Alert.alert('重新规划学习路径', '已开始和已完成的任务会保留，AI 将重新安排其余内容。', [
+      { text: '取消', style: 'cancel' },
+      { text: '重新规划', onPress: () => void run('/smartlearn', { sessionId, action: 'replan' }, sessionId) },
+    ]);
   }
 
   function renderResource(type: ResourceType) {
@@ -199,37 +216,40 @@ function PathView({ sessionId, accountId, token, generation, anotherPathRunning,
       return <Notice key={type} text={resourceLabels[type] + (status === 'running' ? '生成中' : '等待生成')} busy={status === 'running'} />;
     }
     return <Button key={type} label={(status === 'failed' ? '重试' : '生成') + resourceLabels[type]}
-      secondary disabled={generationDisabled} action={() => generate(type)} />;
+      secondary disabled={generationDisabled || offline} action={() => generate(type)} />;
   }
 
   const types = new Set([...(node?.recommendedTypes ?? []), ...(node?.resources.map(resource => resource.type) ?? [])]);
   const extras = [...types].filter(type => type !== 'document' && type !== 'quiz');
   return <>
-    <Heading title={path?.goal ?? '学习路径'} />
+    <Heading title={taskId ? node?.title ?? '学习任务' : path?.goal ?? '学习路径'} />
     {offline ? <Notice text="正在查看本机缓存的课节和资源" /> : null}
     {generation?.error ? <Notice text={generation.error} error /> : null}
     {error ? <Notice text={error} error /> : null}
     {(error || generation?.error) && !busy ? <Button label="刷新课节" secondary action={() => setReload(value => value + 1)} /> : null}
-    {busy ? <Notice text={generation.stage} busy /> : remoteRunning ? <Notice text="服务器正在生成课节，已完成的资源会自动刷新" busy />
+    {busy ? <Notice text={generation.stage} busy /> : remoteRunning ? <Notice text="服务器正在生成，已保存的内容会自动刷新" busy />
       : !loaded && !error ? <Notice text="正在读取学习路径" busy /> : null}
     {anotherPathRunning ? <Notice text="另一条学习路径正在生成，可先阅读本课节已完成的内容。" /> : null}
-    {loaded && !node && !busy ? <Button label="生成第一节" disabled={generationDisabled} action={() => generate()} /> : null}
-    {node ? <>
+    {loaded && !path && !busy && !taskId ? <Button label={isStaged ? '重试规划学习路径' : '生成第一节'}
+      disabled={generationDisabled || offline} action={() => generate()} /> : null}
+    {!taskId && path?.nodes.length ? <>
+      <PathTimeline nodes={path.nodes} onTask={openTask} />
+      <Button label="让 AI 重新规划学习路径" secondary disabled={generationDisabled || offline} action={replan} />
+    </> : null}
+    {taskId && loaded && (!node || node.status === 'locked') ? <Notice text={node
+      ? '完成前面的阶段后才能开始此任务' : '此任务已从当前学习路径调整，请返回查看'} /> : null}
+    {node && node.status !== 'locked' ? <>
       <Card>
-        <Section>{node.title}</Section>
         <Text style={styles.detail}>{node.estimatedMinutes} 分钟 · {node.knowledgePoints.join('、')}</Text>
-        {renderResource('document')}
-        {renderResource('quiz')}
+        {isStaged && node.status === 'available' && !generationDisabled ? <Button label="生成讲义与练习"
+          disabled={offline} action={() => void run('/smartlearn/resources', { sessionId, currentNodeId: node.id }, sessionId)} />
+          : <>{renderResource('document')}{renderResource('quiz')}</>}
         {latest && quizId ? <Row title="查看练习报告" icon="bar-chart-2" onPress={() => onPractice(quizId, latest)} /> : null}
-        {node.status === 'in_progress' && latest ?
+        {!isStaged && node.status === 'in_progress' && latest ?
           <Button label="完成并生成下一节" disabled={generationDisabled} action={() => generate(undefined, true)} /> : null}
         <Button label="向 AI 提问" secondary action={() => onChat(node)} />
       </Card>
       {extras.length ? <><Section>配套资源</Section><Card>{extras.map(renderResource)}</Card></> : null}
-      <Section>学习路径</Section>
-      <Card>{path?.nodes.map((item, index) => <Row key={item.id} title={item.title}
-        detail={(index + 1) + ' · ' + (item.status === 'completed' ? '已完成' : item.status === 'in_progress' ? '进行中' : '待学习')}
-        icon={item.status === 'completed' ? 'check-circle' : 'book-open'} onPress={() => setSelectedNode(item.id)} />)}</Card>
     </> : null}
   </>;
 }
@@ -390,7 +410,7 @@ export default function SmartLearn() {
       if (state === 'active') void refresh();
     });
     return () => { mainRequest.current?.abort(); foreground.remove(); };
-  }, [screen.type, refresh, generation?.running, accountId]);
+  }, [screen.type, refresh, generation?.running, accountId, syncRevision]);
 
   const open = (value: Screen) => setScreens(previous => [...previous, value]);
   const back = () => { setScreens(previous => previous.length > 1 ? previous.slice(0, -1) : previous); setError(''); };
@@ -413,7 +433,7 @@ export default function SmartLearn() {
 
   async function createPath() {
     setError('');
-    await run('/smartlearn', { action: 'start', goal: goal.trim(), client: 'mobile' }, undefined, sessionId => {
+    await run('/smartlearn', { action: 'start', goal: goal.trim(), client: 'mobile', planMode: 'staged' }, undefined, sessionId => {
       setGoal('');
       openPath(sessionId);
     });
@@ -454,12 +474,13 @@ export default function SmartLearn() {
   const resumeLabel = !recent ? '创建学习路径' : resumeTarget === 'quiz' ?
     (reportId ? '查看练习报告' : draftInProgress ? '继续答题' : '开始随堂练习') :
     resumeTarget === 'document' ? (reading !== 'new' ? '继续读讲义' : '阅读讲义') :
-    recent.status === 'pending' ? '继续生成第一节' : '继续学习';
+    recent.status === 'pending' ? '继续规划学习路径' : recent.status === 'completed' ? '查看学习路径' : '继续学习';
 
   async function continueLearning() {
     if (!recent || !auth) return switchTab('learn');
     if (resumeRequest.current) return;
     const baseScreens: Screen[] = [{ type: 'main' }, { type: 'path', sessionId: recent.sessionId }];
+    if (currentResume) baseScreens.push({ type: 'path', sessionId: recent.sessionId, taskId: currentResume.nodeId });
     if (resumeTarget === 'quiz' && quiz) {
       setScreens([...baseScreens, { type: 'practice', resourceId: quiz.id, reportId }]);
       return;
@@ -503,7 +524,9 @@ export default function SmartLearn() {
           {screen.type === 'main' && tab === 'chat' ?
             <ChatView token={auth.token} node={chatNode} onClearNode={() => setChatNode(undefined)} onAuthError={logout} /> :
             <Page key={screen.type + ':' + screens.length}>
-              {screen.type === 'path' ? <PathView key={screen.sessionId} sessionId={screen.sessionId} accountId={auth.account.id} token={auth.token} onResource={openResource}
+              {screen.type === 'path' ? <PathView key={screen.sessionId + ':' + (screen.taskId ?? '')} sessionId={screen.sessionId} taskId={screen.taskId}
+                accountId={auth.account.id} token={auth.token} onResource={openResource} syncRevision={syncRevision}
+                onTask={node => open({ type: 'path', sessionId: screen.sessionId, taskId: node.id })}
                 generation={generation?.sessionId === screen.sessionId ? generation : undefined} run={run}
                 anotherPathRunning={!!generation?.running && generation.sessionId !== screen.sessionId}
                 onPractice={openPractice} onAuthError={logout} onChat={node => { switchTab('chat'); setChatNode(node); }} /> : null}
@@ -547,7 +570,7 @@ export default function SmartLearn() {
                   <View style={local.hero}>
                     <Feather name="compass" color="#B5CBFF" size={25} />
                     <Text style={local.heroTitle}>{recent?.goal ?? '从一个学习目标开始'}</Text>
-                    <Text style={local.heroDetail}>{recent?.currentNode?.title ?? 'AI 将按课节生成讲义与随堂练习'}</Text>
+                    <Text style={local.heroDetail}>{recent?.currentNode?.title ?? (recent?.status === 'completed' ? '已完成全部学习任务' : 'AI 将规划学习阶段与任务')}</Text>
                     <Pressable accessibilityRole="button" style={local.heroAction} disabled={openingResume} onPress={() => void continueLearning()}>
                       <Text style={local.heroActionText}>{openingResume ? '正在打开…' : resumeLabel}</Text><Feather name="arrow-right" size={17} color={color.blueDark} />
                     </Pressable>

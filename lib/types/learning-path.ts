@@ -2,8 +2,11 @@ import type { ResourceReference, ResourceType } from './resource';
 
 export type PathNodeStatus = 'locked' | 'available' | 'in_progress' | 'completed';
 
+export type LearningPathStage = { id: string; title: string };
+
 export interface LearningPathNode {
   id: string;
+  stage?: LearningPathStage;
   title: string;
   knowledgePoints: string[];
   resources: ResourceReference[];

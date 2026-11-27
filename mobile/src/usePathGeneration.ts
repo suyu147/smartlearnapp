@@ -38,7 +38,7 @@ export function usePathGeneration(token: string | undefined, onAuthError: () => 
     controller.current = active;
     let currentId = sessionId;
     setGeneration({
-      sessionId, nodeId: body.resourceType ? body.currentNodeId : undefined,
+      sessionId, nodeId: body.currentNodeId,
       resourceType: body.resourceType, running: true, stage: '正在连接学习服务', resources: [], statuses: {},
     });
     try {

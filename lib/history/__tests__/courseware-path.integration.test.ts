@@ -20,8 +20,9 @@ import { GET as getMobileStats } from '@/app/api/v1/mobile/stats/route';
 import { localDay } from '@/lib/mobile/calendar';
 import { DEFAULT_DIMENSIONS } from '@/lib/types/profile';
 import type { StreamEvent } from '@/lib/deeptutor/core/types';
+import type { LearningPathNode } from '@/lib/types/learning-path';
 
-const mocks = vi.hoisted(() => ({ plan: vi.fn(), deck: vi.fn(), generate: vi.fn(), evaluate: vi.fn() }));
+const mocks = vi.hoisted(() => ({ plan: vi.fn(), stages: vi.fn(), deck: vi.fn(), generate: vi.fn(), evaluate: vi.fn() }));
 vi.mock('@/lib/deeptutor/services/auth-middleware', () => ({
   withAuth: (req: Request, handler: (request: Request, ctx: { user: { id: string } }) => Promise<Response>) =>
     handler(req, { user: { id: req.headers.get('x-fixture-user')! } }),
@@ -30,6 +31,7 @@ vi.mock('@/lib/deeptutor/services/learner-profile', () => ({
   getLearnerProfileService: () => ({ getProfile: async () => ({ dimensions: DEFAULT_DIMENSIONS }) }),
 }));
 vi.mock('@/lib/learning-graph/nodes/plan-node', () => ({ planNode: mocks.plan }));
+vi.mock('@/lib/mobile/path-planner', () => ({ planMobileStages: mocks.stages }));
 vi.mock('@/lib/learning-graph/helpers/resource-generators', () => ({ generateResource: mocks.generate }));
 vi.mock('@/lib/learning-graph/helpers/evaluate', () => ({ evaluateQuizResults: mocks.evaluate }));
 vi.mock('@/lib/generation/standard-ppt', async original => ({
@@ -240,6 +242,80 @@ describe.skipIf(process.env.HISTORY_INTEGRATION !== '1')('courseware and paths w
     const updated = (await (await getPath(request('smartlearn?sessionId=' + sessionId))).json()).data.path;
     expect(updated.nodes.map((node: { status: string }) => node.status)).toEqual(['completed', 'in_progress']);
     expect(await prisma.learningSkillMastery.findUnique({ where: { userId_topic: { userId: owner, topic: '算法概览' } } })).toMatchObject({ reviewCount: 1 });
+  });
+
+  it('plans mobile stages upfront, starts tasks out of order and preserves reports when replanning', async () => {
+    function task(id: string, stageId: string): LearningPathNode {
+      return {
+        id, title: id, stage: { id: stageId, title: stageId }, resources: [], knowledgePoints: [id],
+        estimatedMinutes: 30, status: 'locked', prerequisites: [],
+      };
+    }
+    const first = task('树结构', '基础');
+    const second = task('哈希结构', '基础');
+    const third = task('索引设计', '应用');
+    const fourth = task('综合实践', '进阶');
+    mocks.stages.mockResolvedValueOnce([first, second, third, fourth]);
+    mocks.generate.mockClear().mockImplementation(async (type: string) => ({
+      title: type,
+      content: type === 'quiz' ? JSON.stringify([{ type: 'fill', question: '写出数组第一个索引', answer: '0' }]) : '讲解',
+    }));
+    mocks.deck.mockRejectedValue(new Error('Fixture optional PPT disabled'));
+
+    const events = await streamed(await startPath(request('smartlearn', 'POST', {
+      action: 'start', client: 'mobile', planMode: 'staged', goal: '理解数据结构',
+    })));
+    expect(eventNames(events)).toContain('path_update');
+    expect(eventNames(events)).toContain('done');
+    expect(mocks.generate).not.toHaveBeenCalled();
+    const sessionId = events[0].sessionId;
+    const detail = async () => (await (await getPath(request('smartlearn?sessionId=' + sessionId))).json()).data.path as {
+      status: string; nodes: LearningPathNode[];
+    };
+    const statuses = async () => (await detail()).nodes.map(node => node.status);
+    const generate = (currentNodeId: string) =>
+      retryResource(request('smartlearn/resources', 'POST', { sessionId, currentNodeId }));
+    expect(await statuses()).toEqual(['available', 'available', 'locked', 'locked']);
+    expect((await generate(third.id)).status).toBe(409);
+
+    async function complete(nodeId: string, answer: string) {
+      const generated = await streamed(await generate(nodeId));
+      expect(eventNames(generated)).toContain('practice_ready');
+      const resourceId = (await detail()).nodes.find(node => node.id === nodeId)!.resources.find(row => row.type === 'quiz')!.resourceId;
+      const attemptId = crypto.randomUUID();
+      const response = await submitPractice(request('mobile/practice', 'POST', {
+        attemptId, version: 1, answers: { '1': answer },
+      }), { params: Promise.resolve({ resourceId }) });
+      expect(response.status).toBe(200);
+      return attemptId;
+    }
+
+    const attemptId = await complete(second.id, '1');
+    expect(await statuses()).toEqual(['available', 'completed', 'locked', 'locked']);
+    expect((await generate(third.id)).status).toBe(409);
+    await complete(first.id, '0');
+    expect(await statuses()).toEqual(['completed', 'completed', 'available', 'locked']);
+    const listed = (await (await listMobilePaths(request('mobile/learning-paths?resume=1'))).json()).data;
+    expect(listed.items).toContainEqual(expect.objectContaining({ sessionId, completedCount: 2, nodeCount: 4 }));
+    expect(listed.resume).toMatchObject({ sessionId, nodeId: third.id });
+
+    expect(eventNames(await streamed(await generate(third.id)))).toContain('practice_ready');
+    const started = (await detail()).nodes.find(node => node.id === third.id);
+    const replacement = task('性能分析', '新阶段');
+    mocks.stages.mockRejectedValueOnce(new Error('Fixture planner unavailable'));
+    const failed = await streamed(await startPath(request('smartlearn', 'POST', { action: 'replan', sessionId })));
+    expect(eventNames(failed)).toContain('error');
+    expect((await detail()).nodes.map(node => node.id)).toEqual([first.id, second.id, third.id, fourth.id]);
+    mocks.stages.mockResolvedValueOnce([replacement]);
+    const replanned = await streamed(await startPath(request('smartlearn', 'POST', { action: 'replan', sessionId })));
+    expect(eventNames(replanned)).toContain('path_update');
+    expect((await detail()).nodes.map(node => node.id)).toEqual([first.id, second.id, third.id, replacement.id]);
+    expect((await detail()).nodes.find(node => node.id === third.id)).toEqual(started);
+    expect(await statuses()).toEqual(['completed', 'completed', 'in_progress', 'locked']);
+    const report = (await (await getReport(request('mobile/practice/attempts'), {
+      params: Promise.resolve({ attemptId }),
+    })).json()).data;
+    expect(report).toMatchObject({ attemptId, nodeId: second.id, score: 0 });
   });
 
   it('retries only wrong questions and refreshes review queues without overwriting the original report', async () => {

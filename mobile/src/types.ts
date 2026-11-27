@@ -30,6 +30,7 @@ export type Resource = {
 
 export type Node = {
   id: string;
+  stage?: { id: string; title: string };
   title: string;
   status: 'locked' | 'available' | 'in_progress' | 'completed';
   knowledgePoints: string[];
@@ -47,6 +48,7 @@ export type Resume = {
 };
 export type PathSummary = {
   sessionId: string; goal: string; status: string; updatedAt: string;
+  staged?: boolean;
   currentNode: { id: string; title: string } | null; completedCount: number; nodeCount: number;
 };
 export type Stats = { answered: number; accuracy: number; days: number };

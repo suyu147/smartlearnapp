@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/utils/database';
 import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
-import { PATH_SESSION_MODE } from '@/lib/api/server/path-generation';
+import { isStagedMobilePath, mobilePracticeProgress, PATH_SESSION_MODE } from '@/lib/api/server/path-generation';
+import { applyStageProgress, currentStageTask } from '@/lib/mobile/path-progress';
 import type { LearningPathNode } from '@/lib/types/learning-path';
 import { latestNodePractice } from '@/lib/mobile/practice';
 
@@ -13,26 +14,34 @@ export async function GET(req: NextRequest) {
       orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       skip: offset,
       take: 21,
-      select: { id: true, title: true, updatedAt: true, learningPaths: {
+      select: { id: true, title: true, updatedAt: true, metadata: true, learningPaths: {
         where: { userId: user.id, deletedAt: null },
         select: { nodes: true, status: true },
         take: 1,
       } },
     });
-    const items = sessions.slice(0, 20).map(session => {
+    const listed = sessions.slice(0, 20);
+    const practiced = await mobilePracticeProgress(user.id, listed.filter(isStagedMobilePath).map(session => session.id));
+    const summaries = listed.map(session => {
       const path = session.learningPaths[0];
-      const nodes = (path?.nodes ?? []) as unknown as LearningPathNode[];
-      const current = nodes.find(node => node.status === 'in_progress');
+      const staged = isStagedMobilePath(session);
+      const stored = (path?.nodes ?? []) as unknown as LearningPathNode[];
+      const nodes = staged ? applyStageProgress(stored, practiced) : stored;
+      const current = staged ? currentStageTask(nodes) : nodes.find(node => node.status === 'in_progress');
+      const completedCount = nodes.filter(node => node.status === 'completed').length;
       return {
-        sessionId: session.id, goal: session.title, updatedAt: session.updatedAt, status: path?.status ?? 'pending',
-        currentNode: current ? { id: current.id, title: current.title } : null,
-        completedCount: nodes.filter(node => node.status === 'completed').length,
-        nodeCount: nodes.length,
+        item: {
+          sessionId: session.id, goal: session.title, updatedAt: session.updatedAt, staged,
+          status: staged && nodes.length && completedCount === nodes.length ? 'completed' : path?.status ?? 'pending',
+          currentNode: current ? { id: current.id, title: current.title } : null,
+          completedCount, nodeCount: nodes.length,
+        },
+        current,
       };
     });
-    const recent = items[0];
-    const recentNodes = sessions[0]?.learningPaths[0]?.nodes as unknown as LearningPathNode[] | undefined;
-    const node = recentNodes?.find(item => item.status === 'in_progress');
+    const items = summaries.map(({ item }) => item);
+    const recent = summaries[0]?.item;
+    const node = summaries[0]?.current;
     let resume = null;
     if (req.nextUrl.searchParams.get('resume') === '1' && recent && node) {
       const candidates = node.resources.filter(resource => resource.type === 'document' || resource.type === 'quiz');
