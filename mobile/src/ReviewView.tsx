@@ -63,16 +63,19 @@ export default function ReviewView({ accountId, token, mode, initialTopic, syncR
     const done = data?.completedToday ?? 0;
     const remaining = data?.total ?? 0;
     return <Card>
-      <Section>{title}</Section>
+      <View style={local.summaryHeader}>
+        <Section>{title}</Section>
+        {data ? <Text style={local.count}>{remaining ? remaining + ' 题待复习' : '暂无待复习'}</Text> : null}
+      </View>
       {status}
       {data ? <>
-        <Text style={styles.detail}>已完成 {done} 题 · 剩余 {remaining} 题</Text>
+        {done || remaining ? <Text style={styles.detail}>今日已完成 {done} 题</Text> : null}
         {done + remaining > 0 ? <View accessibilityRole="progressbar"
           accessibilityValue={{ min: 0, max: done + remaining, now: done }} style={local.track}>
           <View style={[local.fill, { width: `${100 * done / (done + remaining)}%` }]} />
         </View> : null}
         {batchButton}
-        {remaining ? <Button label="查看复习列表" secondary action={() => onOpen?.()} /> : null}
+        {remaining && onOpen ? <Button label="查看复习列表" secondary action={onOpen} /> : null}
       </> : null}
     </Card>;
   }
@@ -104,6 +107,9 @@ export default function ReviewView({ accountId, token, mode, initialTopic, syncR
 }
 
 const local = StyleSheet.create({
+  summaryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 5 },
+  count: { color: color.green, backgroundColor: color.lightGreen, paddingHorizontal: 8, paddingVertical: 4,
+    overflow: 'hidden', borderRadius: 10, fontWeight: '700', fontSize: 11 },
   track: { height: 7, backgroundColor: color.tint, borderRadius: 8, overflow: 'hidden' },
   fill: { height: '100%', backgroundColor: color.blue, borderRadius: 8 },
   filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

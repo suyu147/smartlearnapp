@@ -66,12 +66,14 @@ export default function LearningStatsView({ accountId, token, syncRevision, comp
 }
 
 function Metric({ title, value }: { title: string; value: string }) {
-  return <View style={local.metric}><Text style={styles.rowTitle}>{value}</Text><Text style={styles.detail}>{title}</Text></View>;
+  return <View style={local.metric}><Text style={local.metricValue}>{value}</Text><Text style={local.metricLabel}>{title}</Text></View>;
 }
 
 const local = StyleSheet.create({
-  metrics: { flexDirection: 'row', gap: 8 },
-  metric: { flex: 1, gap: 3 },
+  metrics: { flexDirection: 'row', gap: 5, padding: 8, borderRadius: 14, backgroundColor: color.background },
+  metric: { flex: 1, alignItems: 'center', paddingVertical: 3, gap: 2 },
+  metricValue: { color: color.ink, fontSize: 18, lineHeight: 25, fontWeight: '800', fontVariant: ['tabular-nums'], textAlign: 'center' },
+  metricLabel: { color: color.muted, fontSize: 12, lineHeight: 18, textAlign: 'center' },
   day: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   track: { flex: 1, height: 8, backgroundColor: color.tint, borderRadius: 8, overflow: 'hidden' },
   bar: { height: '100%', backgroundColor: color.blue, borderRadius: 8 },

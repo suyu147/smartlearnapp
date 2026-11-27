@@ -204,7 +204,8 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
   if (report) return <>
     <Heading title={report.kind === 'practice' ? '练习报告' : '复习报告'} detail={report.title} />
     {offline ? <Notice text="正在查看本机缓存的报告" /> : null}
-    <Card><View style={local.scoreBlock}>
+    <Card style={local.reportCard}><View style={local.scoreBlock}>
+      <Text style={local.scoreLabel}>本次得分</Text>
       <Text style={local.score}>{report.score}<Text style={local.unit}> 分</Text></Text>
       <Text style={styles.detail}>本次 {report.total} 题，答对 {report.correctCount} 题</Text>
     </View></Card>
@@ -213,7 +214,7 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
     {batch ? <Button label="返回列表查看剩余题目" action={() => onNextBatch(batch)} /> : null}
     <Section>逐题解析</Section>
     {report.answers.map(item => <Card key={item.id}>
-      <Text style={[styles.detail, { color: item.correct ? color.green : color.red }]}>{item.correct ? '回答正确' : '本次答错'} · {item.topic}</Text>
+      <Text style={[local.answerTag, item.correct ? local.correctTag : local.incorrectTag]}>{item.correct ? '回答正确' : '本次答错'} · {item.topic}</Text>
       <MarkdownContent content={item.question} />
       <Text style={styles.body}>你的答案　{item.userAnswer}</Text>
       <Text style={styles.body}>参考答案　{item.correctAnswer}</Text>
@@ -242,15 +243,23 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
     }} /> : !practice && !loading ? <Button label="重新加载" action={() => setRetry(value => value + 1)} /> : null}
     {practice && question && draft && !loading ? <>
       {practice.latestAttemptId ? <Button label="查看上次报告" secondary disabled={busy} action={() => void finish(practice.latestAttemptId ?? undefined)} /> : null}
-      <Text style={styles.detail}>第 {step + 1} / {total} 题</Text>
-      <View style={local.track}><View style={[local.bar, { width: `${(step + 1) / total * 100}%` }]} /></View>
+      <View style={local.progressRow}>
+        <Text style={local.questionTag}>{question.type === 'choice' ? '单选题' : '填空题'}</Text>
+        <Text style={styles.detail}>第 {step + 1} / {total} 题</Text>
+      </View>
+      <View accessible accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: total, now: step + 1 }} style={local.track}>
+        <View style={[local.bar, { width: `${(step + 1) / total * 100}%` }]} />
+      </View>
       <Card><MarkdownContent content={question.question} /></Card>
       {question.type === 'choice' ? question.options?.map((option, index) => {
         const checked = answers[question.id] === option;
         return <Pressable accessibilityRole="radio" accessibilityState={{ checked }} disabled={busy || queued} key={index}
           onPress={() => changeAnswer(question.id, option)}
           style={[local.option, checked && local.selected]}>
-          <Text style={local.letter}>{String.fromCharCode(65 + index)}</Text><View style={local.optionText}><MarkdownContent content={option} unwrap={false} /></View>
+          <View style={[local.letterBox, checked && local.letterSelected]}>
+            <Text style={[local.letter, checked && local.letterSelectedText]}>{String.fromCharCode(65 + index)}</Text>
+          </View>
+          <View style={local.optionText}><MarkdownContent content={option} unwrap={false} /></View>
         </Pressable>;
       }) : <Field key={question.id} accessibilityLabel="答案" placeholder="输入答案" maxLength={2000} editable={!busy && !queued}
         value={answers[question.id] ?? ''} onChangeText={value => changeAnswer(question.id, value)} />}
@@ -264,7 +273,9 @@ export default function PracticeView({ resourceId, accountId, token, reportId, r
 }
 
 const local = StyleSheet.create({
-  scoreBlock: { gap: 5, alignItems: 'center', padding: 12 },
+  reportCard: { backgroundColor: '#EEF3FF', borderColor: '#DAE6FF' },
+  scoreBlock: { gap: 4, alignItems: 'center', padding: 12 },
+  scoreLabel: { color: color.blueDark, fontWeight: '700', fontSize: 13 },
   score: { color: color.blue, fontSize: 54, fontWeight: '800', fontVariant: ['tabular-nums'] },
   unit: { fontSize: 17, fontWeight: '700' },
   track: { height: 6, borderRadius: 5, backgroundColor: color.line, overflow: 'hidden' },
@@ -273,5 +284,15 @@ const local = StyleSheet.create({
     borderColor: color.line, backgroundColor: color.white, padding: 12 },
   selected: { backgroundColor: color.tint, borderColor: color.blue },
   optionText: { flex: 1 },
-  letter: { color: color.blueDark, fontWeight: '800', width: 23 },
+  progressRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  questionTag: { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8, overflow: 'hidden',
+    backgroundColor: color.tint, color: color.blueDark, fontSize: 12, fontWeight: '700' },
+  letterBox: { width: 30, height: 30, borderRadius: 9, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
+  letterSelected: { backgroundColor: color.blue },
+  letter: { color: color.blueDark, fontWeight: '800' },
+  letterSelectedText: { color: color.white },
+  answerTag: { alignSelf: 'flex-start', overflow: 'hidden', borderRadius: 10, paddingVertical: 4, paddingHorizontal: 8,
+    fontSize: 12, fontWeight: '700' },
+  correctTag: { color: color.green, backgroundColor: color.lightGreen },
+  incorrectTag: { color: color.red, backgroundColor: color.lightRed },
 });

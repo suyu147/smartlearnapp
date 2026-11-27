@@ -1,7 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Node } from './types';
-import { color } from './ui';
+import { color, surfaceShadow } from './ui';
 
 type Stage = { id: string; title: string; tasks: Node[] };
 
@@ -33,8 +33,9 @@ export default function PathTimeline({ nodes, onTask }: { nodes: Node[]; onTask:
       const estimate = hours ? hours + ' 小时' + (remaining ? ' ' + remaining + ' 分钟' : '') : minutes + ' 分钟';
       return <View key={stage.id} style={local.stage}>
         {index < groups.size - 1 ? <View style={local.rail} /> : null}
-        <View style={[local.marker, local[state]]}>
-          <Feather name={state === 'in_progress' ? 'zap' : statusIcons[state]} size={16} style={local[state]} />
+        <View style={[local.marker, local[state], state === 'in_progress' && local.activeMarker]}>
+          <Feather name={state === 'in_progress' ? 'zap' : statusIcons[state]} size={16}
+            color={state === 'in_progress' ? color.white : local[state].color} />
         </View>
         <View style={local.stageContent}>
           <View style={local.header}>
@@ -77,10 +78,11 @@ const local = StyleSheet.create({
   stageTitle: { flex: 1, color: color.ink, fontSize: 17, fontWeight: '800', lineHeight: 25 },
   subtitle: { color: color.muted, fontSize: 12, lineHeight: 18 },
   tasks: { gap: 7, marginTop: 5 },
-  task: { minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10,
+  task: { ...surfaceShadow, minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10,
     paddingVertical: 9, backgroundColor: color.white, borderColor: color.line, borderWidth: 1, borderRadius: 14 },
   activeTask: { borderColor: '#AFC5FC' },
-  lockedTask: { backgroundColor: '#F0F4FA' },
+  activeMarker: { backgroundColor: color.blue, borderColor: '#D7E6FF' },
+  lockedTask: { backgroundColor: '#F0F4FA', elevation: 0 },
   taskIcon: { width: 25, height: 25, alignItems: 'center', justifyContent: 'center', borderRadius: 13 },
   taskTitle: { flex: 1, fontSize: 14, lineHeight: 20, fontWeight: '700', color: color.ink },
   lockedTitle: { color: color.muted },
