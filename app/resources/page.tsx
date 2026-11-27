@@ -25,8 +25,10 @@ import { fetchResources, saveResources, deleteResources } from '@/lib/api/resour
 import { useAuthStore } from '@/lib/store/auth-store';
 import { useSettingsStoreV2 } from '@/lib/store/settings-store';
 import { ResourceViewer } from '@/components/workspace/resource-viewer';
+import { StandardPptViewer } from '@/components/resources/standard-ppt-viewer';
 import { RESOURCE_TYPE_LABELS } from '@/lib/types/resource';
 import type { Resource, ResourceType } from '@/lib/types/resource';
+import type { StandardPptLanguage, StandardPptOutline, StandardPptStyle } from '@/lib/types/standard-ppt';
 import {
   Dialog,
   DialogContent,
@@ -104,6 +106,15 @@ const RESOURCE_CARDS: ResourceCardConfig[] = [
     iconClass: 'bg-pastel-cyan text-cyan-600',
     accent: 'from-cyan-500/10 to-cyan-500/0',
   },
+  {
+    type: 'ppt',
+    title: 'PPT',
+    desc: '生成可下载的标准 PowerPoint 演示文稿，支持配图与多种风格',
+    placeholder: '例如：人工智能在教育中的应用',
+    icon: Presentation,
+    iconClass: 'bg-pastel-violet text-violet-600',
+    accent: 'from-violet-500/10 to-violet-500/0',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -115,9 +126,10 @@ const RESOURCE_CARDS: ResourceCardConfig[] = [
  * History entries may contain types outside RESOURCE_CARDS (e.g. `ppt`
  * produced by the learning path), so a fallback config is required here.
  */
-function getCardMeta(type: ResourceType): ResourceCardConfig {
+function getCardMeta(resource: Resource): ResourceCardConfig {
+  const { type } = resource;
   return (
-    RESOURCE_CARDS.find((card) => card.type === type) ?? {
+    RESOURCE_CARDS.find((card) => card.type === type && (type !== 'ppt' || resource.sourceAgent === 'resource-ppt')) ?? {
       type,
       title: RESOURCE_TYPE_LABELS[type] ?? type,
       desc: '',
@@ -145,6 +157,13 @@ export default function ResourcesPage() {
   const [generating, setGenerating] = useState(false);
   const [entries, setEntries] = useState<GeneratedEntry[]>([]);
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [pptSlideCount, setPptSlideCount] = useState('8');
+  const [pptLanguage, setPptLanguage] = useState<StandardPptLanguage>('zh-CN');
+  const [pptStyle, setPptStyle] = useState<StandardPptStyle>('professional');
+  const [pptIncludeImages, setPptIncludeImages] = useState(false);
+  const [pptResult, setPptResult] = useState<Resource | null>(null);
+  const [pptError, setPptError] = useState<string | null>(null);
+  const [pptOutline, setPptOutline] = useState<StandardPptOutline | null>(null);
 
   const userId = useAuthStore((s) => s.user?.id) ?? '';
   const settings = useSettingsStoreV2();
@@ -188,12 +207,24 @@ export default function ResourcesPage() {
   const handleCardClick = useCallback((card: ResourceCardConfig) => {
     setActiveType(card);
     setInputValue('');
+    setPptResult(null);
+    setPptError(null);
+    setPptOutline(null);
+    if (card.type === 'ppt') {
+      setPptSlideCount('8');
+      setPptLanguage('zh-CN');
+      setPptStyle('professional');
+      setPptIncludeImages(false);
+    }
   }, []);
 
   /** Close the modal. */
   const handleCloseModal = useCallback(() => {
     setActiveType(null);
     setInputValue('');
+    setPptResult(null);
+    setPptError(null);
+    setPptOutline(null);
   }, []);
 
   /** Submit the resource name and trigger generation. */
@@ -204,6 +235,43 @@ export default function ResourcesPage() {
 
       const name = inputValue.trim();
       const type = activeType.type;
+
+      if (type === 'ppt') {
+        const slideCount = Number(pptSlideCount);
+        if (!Number.isInteger(slideCount) || slideCount < 3 || slideCount > 20) return;
+        setPptError(null);
+        setGenerating(true);
+        try {
+          const aiConfig = buildAiConfig();
+          const response = await apiFetch<{ resource: Resource } | { outline: StandardPptOutline }>('/api/v1/smartlearn/ppt', {
+            method: 'POST',
+            body: JSON.stringify({
+              action: pptOutline ? 'generate' : 'outline',
+              topic: name,
+              slideCount,
+              language: pptLanguage,
+              style: pptStyle,
+              includeImages: pptIncludeImages,
+              outline: pptOutline ?? undefined,
+              aiConfig: { providerId: aiConfig.providerId, modelId: aiConfig.modelId, apiKey: aiConfig.apiKey },
+            }),
+          });
+          if (useAuthStore.getState().user?.id !== (userId || undefined)) return;
+          if ('outline' in response) {
+            setPptOutline(response.outline);
+          } else {
+            const { resource } = response;
+            setActiveIndex(null);
+            setEntries((prev) => [{ resource }, ...prev.filter((entry) => entry.resource.id !== resource.id)]);
+            setPptResult(resource);
+          }
+        } catch (error) {
+          setPptError(error instanceof Error ? error.message : 'PPT 生成失败');
+        } finally {
+          setGenerating(false);
+        }
+        return;
+      }
 
       // Optimistically add a loading entry and select it.
       // 持久化后 id 会作为数据库主键，优先使用全局唯一 ID
@@ -231,14 +299,7 @@ export default function ResourcesPage() {
       handleCloseModal();
 
       try {
-        // apiFetch auto-unwraps the { success, data } envelope, so the
-        // resolved value is the `data` payload directly.
-        const res = await apiFetch<{
-          type: ResourceType;
-          title: string;
-          content: string;
-          metadata?: Record<string, unknown>;
-        }>('/api/v1/resources/generate', {
+        const generated = await apiFetch<Pick<Resource, 'type' | 'title' | 'content' | 'metadata'>>('/api/v1/resources/generate', {
           method: 'POST',
           body: JSON.stringify({ type, name, aiConfig: buildAiConfig() }),
         });
@@ -246,10 +307,10 @@ export default function ResourcesPage() {
         const finished: Resource = {
           id: placeholderId,
           userId: '',
-          type: res.type,
-          title: res.title,
-          content: res.content,
-          metadata: res.metadata as Resource['metadata'],
+          type: generated.type,
+          title: generated.title,
+          content: generated.content,
+          metadata: generated.metadata,
           sourceAgent: type,
           status: 'ready',
           createdAt: new Date().toISOString(),
@@ -273,7 +334,7 @@ export default function ResourcesPage() {
         setGenerating(false);
       }
     },
-    [activeType, inputValue, generating, entries.length, handleCloseModal, buildAiConfig, userId],
+    [activeType, inputValue, generating, entries.length, handleCloseModal, buildAiConfig, userId, pptSlideCount, pptLanguage, pptStyle, pptIncludeImages, pptOutline],
   );
 
   /** Remove an entry. */
@@ -370,7 +431,7 @@ export default function ResourcesPage() {
             学习资源
           </h1>
           <p className="mt-1.5 text-[13.5px] text-[var(--muted-foreground)]">
-            选择资源类型，输入主题，一键生成文档、视频、习题、思维导图、扩展阅读和代码
+            选择资源类型，输入主题，一键生成学习资源或可下载的标准 PPTX
           </p>
         </div>
 
@@ -440,7 +501,7 @@ export default function ResourcesPage() {
               {/* Resource list */}
               <div className="space-y-2">
                 {entries.map((entry, idx) => {
-                  const card = getCardMeta(entry.resource.type);
+                  const card = getCardMeta(entry.resource);
                   const Icon = card.icon;
                   const active = idx === activeIndex;
                   return (
@@ -562,6 +623,8 @@ export default function ResourcesPage() {
                         重试
                       </button>
                     </div>
+                  ) : activeEntry.resource.sourceAgent === 'resource-ppt' ? (
+                    <div className="p-5"><StandardPptViewer key={activeEntry.resource.id} resource={activeEntry.resource} /></div>
                   ) : (
                     <ResourceViewer resource={activeEntry.resource} />
                   )
@@ -580,8 +643,8 @@ export default function ResourcesPage() {
       </div>
 
       {/* Input modal */}
-      <Dialog open={activeType !== null} onOpenChange={(open) => !open && handleCloseModal()}>
-        <DialogContent className="sm:max-w-[460px]">
+      <Dialog open={activeType !== null} onOpenChange={(open) => !open && !generating && handleCloseModal()}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[460px]">
           <DialogHeader>
             <div className="mb-2 flex items-center gap-3">
               {activeType && (
@@ -596,16 +659,65 @@ export default function ResourcesPage() {
               )}
               <div>
                 <DialogTitle className="text-[17px] font-bold">
-                  生成{activeType?.title}
+                  {pptResult ? 'PPT 已保存' : pptOutline ? '审阅 PPT 大纲' : '生成' + (activeType?.title ?? '')}
                 </DialogTitle>
                 <DialogDescription className="mt-0.5 text-[12.5px]">
-                  输入主题或知识点名称，系统将自动生成对应资源
+                  {pptResult ? '可在资源中心历史记录中再次下载' : pptOutline ? pptSlideCount + ' 页 · ' + inputValue : '输入主题或知识点名称'}
                 </DialogDescription>
               </div>
             </div>
           </DialogHeader>
 
+          {pptResult ? (
+            <StandardPptViewer resource={pptResult} />
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
+            {pptOutline ? (
+              <fieldset disabled={generating} className="space-y-3">
+                <label className="block text-sm font-medium">
+                  文稿标题
+                  <input
+                    required
+                    maxLength={60}
+                    value={pptOutline.title}
+                    onChange={(event) => setPptOutline({ ...pptOutline, title: event.target.value })}
+                    className="mt-1.5 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  />
+                </label>
+                <ol className="max-h-[42dvh] space-y-3 overflow-y-auto pr-2">
+                  {pptOutline.slides.map((slide, index) => (
+                    <li key={index} className="space-y-2 border-t border-border pt-3">
+                      <p className="text-xs font-medium text-muted-foreground">第 {index + 1} 页{index === 0 ? ' · 封面' : index === pptOutline.slides.length - 1 ? ' · 总结' : ''}</p>
+                      {index > 0 && (
+                        <input
+                          aria-label={`第 ${index + 1} 页标题`}
+                          required
+                          maxLength={60}
+                          value={slide.title}
+                          onChange={(event) => setPptOutline({
+                            ...pptOutline,
+                            slides: pptOutline.slides.map((entry, i) => i === index ? { ...entry, title: event.target.value } : entry),
+                          })}
+                          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                        />
+                      )}
+                      <textarea
+                        aria-label={`第 ${index + 1} 页内容提纲`}
+                        required
+                        maxLength={220}
+                        rows={2}
+                        value={slide.purpose}
+                        onChange={(event) => setPptOutline({
+                          ...pptOutline,
+                          slides: pptOutline.slides.map((entry, i) => i === index ? { ...entry, purpose: event.target.value } : entry),
+                        })}
+                        className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                      />
+                    </li>
+                  ))}
+                </ol>
+              </fieldset>
+            ) : (
             <div>
               <label
                 htmlFor="resource-name"
@@ -619,6 +731,7 @@ export default function ResourcesPage() {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 placeholder={activeType?.placeholder}
+                maxLength={activeType?.type === 'ppt' ? 200 : undefined}
                 autoFocus
                 disabled={generating}
                 className="w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-3.5 py-2.5 text-[13.5px] text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)]/60 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60"
@@ -627,15 +740,75 @@ export default function ResourcesPage() {
                 提示：输入越具体，生成质量越高（例如具体算法名、数据结构名称）
               </p>
             </div>
+            )}
 
+            {activeType?.type === 'ppt' && !pptOutline && (
+              <div className="space-y-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="text-[12.5px] font-medium text-[var(--foreground)]">
+                    页数
+                    <input
+                      type="number"
+                      min={3}
+                      max={20}
+                      required
+                      step={1}
+                      value={pptSlideCount}
+                      onChange={(event) => setPptSlideCount(event.target.value)}
+                      disabled={generating}
+                      className="mt-1.5 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[13px] font-normal outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:opacity-60"
+                    />
+                  </label>
+                  <label className="text-[12.5px] font-medium text-[var(--foreground)]">
+                    语言
+                    <select
+                      value={pptLanguage}
+                      onChange={(event) => setPptLanguage(event.target.value as StandardPptLanguage)}
+                      disabled={generating}
+                      className="mt-1.5 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[13px] font-normal outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:opacity-60"
+                    >
+                      <option value="zh-CN">简体中文</option>
+                      <option value="en-US">English</option>
+                    </select>
+                  </label>
+                </div>
+                <label className="block text-[12.5px] font-medium text-[var(--foreground)]">
+                  风格
+                  <select
+                    value={pptStyle}
+                    onChange={(event) => setPptStyle(event.target.value as StandardPptStyle)}
+                    disabled={generating}
+                    className="mt-1.5 w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[13px] font-normal outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:opacity-60"
+                  >
+                    <option value="professional">专业商务</option>
+                    <option value="minimal">极简</option>
+                    <option value="academic">学术</option>
+                    <option value="creative">创意</option>
+                    <option value="dark">深色科技</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2 text-[12.5px] text-[var(--foreground)]">
+                  <input
+                    type="checkbox"
+                    checked={pptIncludeImages}
+                    onChange={(event) => setPptIncludeImages(event.target.checked)}
+                    disabled={generating}
+                    className="h-4 w-4 rounded border-violet-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  为页面生成配图（需要配置图片生成服务）
+                </label>
+              </div>
+            )}
+
+            {activeType?.type === 'ppt' && pptError && <p role="alert" className="text-sm text-destructive">{pptError}</p>}
             <div className="flex items-center justify-end gap-2 pt-1">
               <button
                 type="button"
-                onClick={handleCloseModal}
+                onClick={pptOutline ? () => { setPptOutline(null); setPptError(null); } : handleCloseModal}
                 disabled={generating}
                 className="rounded-full border border-[var(--border)] px-4 py-2 text-[12.5px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-60"
               >
-                取消
+                {pptOutline ? '返回设置' : '取消'}
               </button>
               <button
                 type="submit"
@@ -645,17 +818,18 @@ export default function ResourcesPage() {
                 {generating ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    生成中…
+                    {activeType?.type === 'ppt' ? pptOutline ? '正在生成页面…' : '正在生成大纲…' : '生成中…'}
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-3.5 w-3.5" />
-                    生成资源
+                    {activeType?.type === 'ppt' ? pptOutline ? '确认并生成 PPT' : '生成大纲' : '生成资源'}
                   </>
                 )}
               </button>
             </div>
           </form>
+          )}
         </DialogContent>
       </Dialog>
     </div>

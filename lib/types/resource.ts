@@ -1,3 +1,5 @@
+import type { StandardPptDeck } from '@/lib/types/standard-ppt';
+
 export type ResourceType = 'document' | 'mindmap' | 'quiz' | 'video' | 'code' | 'reading' | 'ppt';
 
 export const ALL_RESOURCE_TYPES: ResourceType[] = ['document', 'mindmap', 'quiz', 'video', 'code', 'reading', 'ppt'];
@@ -103,6 +105,7 @@ export interface Resource {
     error?: boolean;
     videoData?: VideoSearchResult;
     pptData?: import('@/lib/types/stage').Scene[];
+    standardPptData?: StandardPptDeck;
     structuredDocument?: StructuredDocument;
     structuredReading?: StructuredReading;
   };
