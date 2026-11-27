@@ -5,12 +5,27 @@ import { Linking, Text, View } from 'react-native';
 import { apiUrl } from './api';
 import { resourceLabels, type Resource } from './types';
 import { Button, Card, Heading, Notice, Section, styles } from './ui';
+import MarkdownContent, { CodeContent } from './MarkdownContent';
+import MindmapView from './MindmapView';
+
+function readDocument(resource: Resource): NonNullable<Resource['metadata']>['structuredDocument'] {
+  if (Array.isArray(resource.metadata?.structuredDocument?.sections)) return resource.metadata?.structuredDocument;
+  const stored = resource.content.trim();
+  const json = /^\x60{3}json\s*\n([\s\S]*?)\n\x60{3}$/i.exec(stored)?.[1] ?? stored;
+  if (!json.startsWith('{')) return undefined;
+  try {
+    const parsed = JSON.parse(json);
+    if (parsed?.format === 'structured_document_v1' && Array.isArray(parsed.sections)) return parsed;
+  } catch {
+    return undefined;
+  }
+}
 
 export default function ResourceView({ resource, token }: { resource: Resource; token: string }) {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const metadata = resource.metadata;
-  const doc = metadata?.structuredDocument;
+  const doc = resource.type === 'document' ? readDocument(resource) : undefined;
   const reading = metadata?.structuredReading;
   const videos = metadata?.videoData?.videos;
   const openLink = (url: string) => {
@@ -44,17 +59,19 @@ export default function ResourceView({ resource, token }: { resource: Resource; 
     {status ? <Notice text={status} error /> : null}
     {resource.type === 'ppt' ? <Button label={busy ? '下载中…' : '下载并打开 PPTX'} disabled={busy} action={() => void download()} /> : null}
     {resource.type === 'document' && doc ? <>
-      {doc.introduction ? <Text style={styles.body}>{doc.introduction}</Text> : null}
+      {doc.introduction ? <MarkdownContent content={doc.introduction} /> : null}
       {doc.sections.map(section => <Card key={section.id}>
         <Section>{section.title}</Section>
         {section.blocks.map((block, index) => <View key={index}>
           {block.title ? <Text style={styles.rowTitle}>{block.title}</Text> : null}
           {block.type === 'table' ? [block.headers ?? [], ...(block.rows ?? [])].map((row, rowIndex) =>
             <Text key={rowIndex} style={styles.body}>{row.join('  ·  ')}</Text>) :
-            <Text selectable style={styles.body}>{block.content}</Text>}
+            block.content ? (block.type === 'code' && !/^\s*(?:\x60{3}|~{3})/.test(block.content)
+              ? <CodeContent content={block.content} />
+              : <MarkdownContent content={block.content} unwrap={block.type !== 'code'} />) : null}
         </View>)}
       </Card>)}
-      {doc.summary ? <Text style={styles.body}>{doc.summary}</Text> : null}
+      {doc.summary ? <MarkdownContent content={doc.summary} /> : null}
     </> : null}
     {resource.type === 'video' ? <>
       {videos?.length ? videos.map(video => <Card key={video.id}>
@@ -64,22 +81,19 @@ export default function ResourceView({ resource, token }: { resource: Resource; 
       </Card>) : <Notice text="暂未找到相关视频" />}
     </> : null}
     {resource.type === 'reading' && reading ? <>
-      {reading.intro ? <Text style={styles.body}>{reading.intro}</Text> : null}
+      {reading.intro ? <MarkdownContent content={reading.intro} /> : null}
       {reading.cards.map(card => <Card key={card.id}><Text style={styles.rowTitle}>{card.title}</Text>
-        <Text style={styles.body}>{card.description}</Text>
-        {card.reason ? <Text style={styles.detail}>{card.reason}</Text> : null}
+        <MarkdownContent content={card.description} />
+        {card.reason ? <MarkdownContent content={card.reason} /> : null}
       </Card>)}
       {reading.externalLinks.map(link => <Button key={link.url} label={link.title} secondary action={() => openLink(link.url)} />)}
     </> : null}
-    {resource.type === 'mindmap' ? <Card>
-      {resource.content.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('```')).map((line, index) => {
-        const level = /^\s*(#+)\s/.exec(line)?.[1].length ?? 2;
-        return <Text key={index} style={[level === 1 ? styles.rowTitle : styles.body, { paddingLeft: Math.min(3, level - 1) * 13 }]}>
-          {line.replace(/^\s*#+\s+/, '')}
-        </Text>;
-      })}
+    {resource.type === 'mindmap' ? <Card><MindmapView content={resource.content} /></Card> : null}
+    {((resource.type === 'document' && !doc) || (resource.type === 'reading' && !reading)) ?
+      <Card><MarkdownContent content={resource.content} /></Card> : null}
+    {resource.type === 'code' ? <Card>
+      {/^\s*(?:\x60{3}|~{3})/.test(resource.content) ? <MarkdownContent content={resource.content} unwrap={false} /> :
+        <CodeContent content={resource.content} />}
     </Card> : null}
-    {(resource.type === 'code' || (resource.type === 'document' && !doc) || (resource.type === 'reading' && !reading)) ?
-      <Card><Text selectable style={styles.body}>{resource.content.replace(/^```[^\n]*\n|\n```\s*$/g, '')}</Text></Card> : null}
   </>;
 }

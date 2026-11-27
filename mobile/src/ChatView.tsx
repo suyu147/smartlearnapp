@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useEffect, useRef, useState } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { ApiError, api, stream } from './api';
 import type { Chat, Message, Node } from './types';
 import { Button, Card, Field, Heading, Notice, Page, Row, color, styles } from './ui';
+import MarkdownContent from './MarkdownContent';
 
 type ChatPage = { messages: Message[]; nextBefore: number | null };
 const initialMessages = { messages: [], nextBefore: null } as ChatPage;
@@ -145,11 +146,12 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
   </View>;
 }
 
-function Bubble({ content, own = false }: { content: string; own?: boolean }) {
+const Bubble = memo(function Bubble({ content, own = false }: { content: string; own?: boolean }) {
+  const formatted = useDeferredValue(content);
   return <View style={[local.bubble, own && local.own]}>
-    <Text selectable style={[styles.body, own && local.ownText]}>{content}</Text>
+    {own ? <Text selectable style={[styles.body, local.ownText]}>{content}</Text> : <MarkdownContent content={formatted} />}
   </View>;
-}
+});
 
 const local = StyleSheet.create({
   screen: { flex: 1 },
