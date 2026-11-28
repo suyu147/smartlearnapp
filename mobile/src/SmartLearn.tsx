@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import * as SecureStore from 'expo-secure-store';
-import { Alert, AppState, BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, AppState, BackHandler, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError, api, apiUrl, isTemporaryError } from './api';
 import { type Account, type LearningPath, type Node, type PathSummary, type Resource, type ResourceType, type Resume, type ReviewBatch, type ReviewItem, type ReviewMode, type ReviewTarget, type Stats, resourceLabels } from './types';
@@ -11,6 +11,9 @@ import PracticeView from './PracticeView';
 import ReviewView from './ReviewView';
 import LearningStatsView from './LearningStatsView';
 import ChatView from './ChatView';
+import NotebookView from './NotebookView';
+import CareerInsightView from './CareerInsightView';
+import type { NoteSource } from './notebook-api';
 import { documentProgress, flushSubmissions, getLearning, readBatch, readDraft, saveBatch, saveDraft } from './learning-storage';
 import PathTimeline from './PathTimeline';
 import { usePathGeneration, type Generation } from './usePathGeneration';
@@ -41,7 +44,9 @@ type Screen =
   | { type: 'resource'; resource: Resource }
   | { type: 'practice'; resourceId?: string; reportId?: string; review?: ReviewTarget; batch?: ReviewBatch }
   | { type: 'review'; mode: ReviewMode; topic?: string }
-  | { type: 'stats' };
+  | { type: 'stats' }
+  | { type: 'notebook' }
+  | { type: 'career' };
 
 const resourceIcons = {
   document: 'file-text', mindmap: 'share-2', quiz: 'check-square', video: 'play-circle',
@@ -330,6 +335,7 @@ export default function SmartLearn() {
   const [resourceFilter, setResourceFilter] = useState<ResourceType | 'all'>('all');
   const [resourceQuery, setResourceQuery] = useState('');
   const [chatNode, setChatNode] = useState<Node>();
+  const [noteSource, setNoteSource] = useState<NoteSource>();
   const [loading, setLoading] = useState(false);
   const [offline, setOffline] = useState(false);
   const [syncRevision, setSyncRevision] = useState(0);
@@ -354,6 +360,7 @@ export default function SmartLearn() {
     setGoal('');
     setShowGoalForm(false);
     setChatNode(undefined);
+    setNoteSource(undefined);
     setResourceFilter('all');
     setResourceQuery('');
     setError('');
@@ -492,6 +499,12 @@ export default function SmartLearn() {
     if (value !== 'chat') setChatNode(undefined);
   }
 
+  function startCareerLearning(goalText: string) {
+    setGoal(goalText.slice(0, 500));
+    setShowGoalForm(true);
+    switchTab('learn');
+  }
+
   async function createPath() {
     setError('');
     await run('/smartlearn', { action: 'start', goal: goal.trim(), client: 'mobile', planMode: 'staged' }, undefined, sessionId => {
@@ -593,7 +606,7 @@ export default function SmartLearn() {
             <IconButton icon="arrow-left" label="返回" action={back} />
           </View> : null}
           {screen.type === 'main' && tab === 'chat' ?
-            <ChatView token={auth.token} node={chatNode} onClearNode={() => setChatNode(undefined)} onAuthError={logout} /> :
+            <ChatView token={auth.token} node={chatNode} onClearNode={() => setChatNode(undefined)} onAuthError={logout} onSaveNote={setNoteSource} /> :
             <Page key={screen.type + ':' + screens.length + (screen.type === 'main' ? ':' + tab : '')}>
               {screen.type === 'path' ? <PathView key={screen.sessionId + ':' + (screen.taskId ?? '')} sessionId={screen.sessionId} taskId={screen.taskId}
                 accountId={auth.account.id} token={auth.token} onResource={openResource} syncRevision={syncRevision}
@@ -601,7 +614,7 @@ export default function SmartLearn() {
                 generation={generation?.sessionId === screen.sessionId ? generation : undefined} run={run}
                 anotherPathRunning={!!generation?.running && generation.sessionId !== screen.sessionId}
                 onPractice={openPractice} onAuthError={logout} onChat={node => { switchTab('chat'); setChatNode(node); }} /> : null}
-              {screen.type === 'resource' ? <ResourceView key={screen.resource.id} resource={screen.resource} token={auth.token}
+              {screen.type === 'resource' ? <ResourceView key={screen.resource.id} resource={screen.resource} token={auth.token} onSaveNote={setNoteSource}
                 onRead={screen.resource.type === 'document' ? () => {
                   documentProgress(auth.account.id, screen.resource.id, 'read');
                   back();
@@ -632,6 +645,8 @@ export default function SmartLearn() {
                 <LearningStatsView accountId={auth.account.id} token={auth.token} syncRevision={syncRevision} onAuthError={logout}
                   onTopic={topic => open({ type: 'review', mode: 'mistakes', topic })} />
               </> : null}
+              {screen.type === 'notebook' ? <NotebookView token={auth.token} onAuthError={logout} /> : null}
+              {screen.type === 'career' ? <CareerInsightView token={auth.token} onAuthError={logout} onStartLearning={startCareerLearning} /> : null}
               {screen.type === 'main' ? <>
                 {error ? <Notice text={error} error /> : null}
                 {offline ? <Notice text="部分学习内容来自本机缓存" /> : null}
@@ -652,6 +667,10 @@ export default function SmartLearn() {
                       <QuickLink icon="repeat" label="错题本" tone={[color.red, color.lightRed]} action={() => open({ type: 'review', mode: 'mistakes' })} />
                       <QuickLink icon="layers" label="资源库" tone={[color.cyan, color.lightCyan]} action={() => switchTab('resources')} />
                       <QuickLink icon="bar-chart-2" label="学习统计" tone={[color.amber, color.lightAmber]} action={() => open({ type: 'stats' })} />
+                    </View>
+                    <View style={local.quickGrid}>
+                      <QuickLink icon="book-open" label="记事本" tone={[color.cyan, color.lightCyan]} action={() => open({ type: 'notebook' })} />
+                      <QuickLink icon="briefcase" label="职业洞察" tone={[color.violet, color.lightViolet]} action={() => open({ type: 'career' })} />
                     </View>
                   </View>
                   <LearningStatsView compact accountId={auth.account.id} token={auth.token} syncRevision={syncRevision}
@@ -731,6 +750,13 @@ export default function SmartLearn() {
                     <Row title="学习统计" icon="bar-chart-2" onPress={() => open({ type: 'stats' })} />
                     <Row title="错题本" icon="repeat" tone={[color.violet, color.lightViolet]} onPress={() => open({ type: 'review', mode: 'mistakes' })} />
                   </Card>
+                  <Section>个人工具</Section>
+                  <Card>
+                    <Row title="记事本" detail="查看和整理网页端共用的笔记" icon="book-open" tone={[color.cyan, color.lightCyan]}
+                      onPress={() => open({ type: 'notebook' })} />
+                    <Row title="职业洞察" detail="评估目标岗位并规划能力提升" icon="briefcase" tone={[color.violet, color.lightViolet]}
+                      onPress={() => open({ type: 'career' })} />
+                  </Card>
                   <Button label="退出登录" secondary action={logout} />
                 </> : null}
                 {error && !loading ? <Button label="重新加载" secondary action={() => { setError(''); void refresh(); }} /> : null}
@@ -745,6 +771,15 @@ export default function SmartLearn() {
               <Text style={[local.navText, tab === item.id && local.navTextActive]}>{item.title}</Text>
             </Pressable>)}
           </View> : null}
+          {noteSource ? <Modal visible onRequestClose={() => setNoteSource(undefined)}>
+            <SafeAreaView style={local.safe}>
+              <View style={local.back}><IconButton icon="x" label="关闭保存笔记" action={() => setNoteSource(undefined)} /></View>
+              <Page><NotebookView token={auth.token} source={noteSource} onAuthError={logout} onSaved={() => {
+                setNoteSource(undefined);
+                Alert.alert('笔记已保存');
+              }} /></Page>
+            </SafeAreaView>
+          </Modal> : null}
         </>}
     </View>
   </SafeAreaView>;

@@ -7,6 +7,7 @@ import { resourceLabels, type Resource } from './types';
 import { Button, Card, Heading, Notice, Section, color, styles } from './ui';
 import MarkdownContent, { CodeContent } from './MarkdownContent';
 import MindmapView from './MindmapView';
+import type { NoteSource } from './notebook-api';
 
 function readDocument(resource: Resource): NonNullable<Resource['metadata']>['structuredDocument'] {
   if (Array.isArray(resource.metadata?.structuredDocument?.sections)) return resource.metadata?.structuredDocument;
@@ -21,7 +22,9 @@ function readDocument(resource: Resource): NonNullable<Resource['metadata']>['st
   }
 }
 
-export default function ResourceView({ resource, token, onRead }: { resource: Resource; token: string; onRead?: () => void }) {
+export default function ResourceView({ resource, token, onRead, onSaveNote }: {
+  resource: Resource; token: string; onRead?: () => void; onSaveNote: (source: NoteSource) => void;
+}) {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [visibleSections, setVisibleSections] = useState(8);
@@ -32,6 +35,28 @@ export default function ResourceView({ resource, token, onRead }: { resource: Re
   const openLink = (url: string) => {
     if (/^https?:\/\//i.test(url)) void Linking.openURL(url).catch(() => setStatus('无法打开此链接'));
   };
+
+  function saveDocument() {
+    const content = doc ? [
+      doc.introduction,
+      ...doc.sections.map(section => [
+        '## ' + section.title,
+        ...section.blocks.flatMap(block => {
+          const title = block.title ? '### ' + block.title : undefined;
+          if (block.type === 'table') {
+            const headers = block.headers?.length ? block.headers : block.rows?.[0]?.map(() => ' ');
+            const row = (cells: string[]) => '| ' + cells.map(cell => cell.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ')).join(' | ') + ' |';
+            return headers ? [title, [row(headers), row(headers.map(() => '---')), ...(block.rows ?? []).map(row)].join('\n')] : [];
+          }
+          const body = block.type === 'code' && block.content && !/^\s*(?:\x60{3}|~{3})/.test(block.content)
+            ? '~~~\n' + block.content + '\n~~~' : block.content;
+          return [title, body];
+        }),
+      ].filter(Boolean).join('\n\n')),
+      doc.summary,
+    ].filter(Boolean).join('\n\n') : resource.content;
+    onSaveNote({ title: resource.title, content, metadata: { source: 'document', resourceId: resource.id } });
+  }
 
   async function download() {
     setBusy(true);
@@ -57,6 +82,8 @@ export default function ResourceView({ resource, token, onRead }: { resource: Re
 
   return <>
     <Heading title={resource.title} detail={resourceLabels[resource.type]} />
+    {resource.type === 'document' && (doc || resource.content.trim()) ?
+      <Button label="保存到记事本" secondary action={saveDocument} /> : null}
     {status ? <Notice text={status} error /> : null}
     {resource.type === 'ppt' ? <Button label={busy ? '下载中…' : '下载并打开 PPTX'} disabled={busy} action={() => void download()} /> : null}
     {resource.type === 'document' && doc ? <>

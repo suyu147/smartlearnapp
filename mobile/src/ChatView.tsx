@@ -5,13 +5,14 @@ import { ApiError, api, stream } from './api';
 import type { Chat, Message, Node } from './types';
 import { Button, Card, Field, Gradient, Heading, IconButton, Notice, Page, Row, color, gradient, styles, surfaceShadow } from './ui';
 import MarkdownContent from './MarkdownContent';
+import type { NoteSource } from './notebook-api';
 
 type ChatPage = { messages: Message[]; nextBefore: number | null };
 const initialMessages = { messages: [], nextBefore: null } as ChatPage;
 const messagePath = (id: string, before?: number) => '/sessions/' + encodeURIComponent(id) + '?limit=40' + (before ? '&before=' + before : '');
 
-export default function ChatView({ token, node, onClearNode, onAuthError }: {
-  token: string; node?: Node; onClearNode: () => void; onAuthError: () => void;
+export default function ChatView({ token, node, onClearNode, onAuthError, onSaveNote }: {
+  token: string; node?: Node; onClearNode: () => void; onAuthError: () => void; onSaveNote: (source: NoteSource) => void;
 }) {
   const [chat, setChat] = useState<Chat>();
   const [chats, setChats] = useState<Chat[]>([]);
@@ -142,7 +143,12 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
         if (chat) void select(chat, messages.nextBefore ?? undefined);
       }} /> : null}
       {!conversation.length && !pending ? <Bubble content="问一个概念、一道题，或请我举例讲解。" /> : null}
-      {conversation.map(message => <Bubble key={message.id} content={message.content} own={message.role === 'user'} />)}
+      {conversation.map(message => <Bubble key={message.id} content={message.content} own={message.role === 'user'}
+        onSave={message.role === 'assistant' && message.content.trim() ? () => onSaveNote({
+          title: chat?.title ? 'AI 回复 · ' + chat.title : 'AI 回复',
+          content: message.content,
+          metadata: { source: 'chat', sessionId: chat?.id, messageId: message.id },
+        }) : undefined} />)}
       {pending ? <Bubble content={pending} own /> : null}
       {draft ? <Bubble content={draft} /> : null}
       {interrupted && !busy && pending ? <Text style={styles.detail}>当前对话已保留在屏幕上，可从历史记录重新读取。</Text> : null}
@@ -162,10 +168,14 @@ export default function ChatView({ token, node, onClearNode, onAuthError }: {
   </View>;
 }
 
-const Bubble = memo(function Bubble({ content, own = false }: { content: string; own?: boolean }) {
+const Bubble = memo(function Bubble({ content, own = false, onSave }: { content: string; own?: boolean; onSave?: () => void }) {
   const formatted = useDeferredValue(content);
   return <View style={[local.bubble, own ? local.own : local.assistant]}>
     {own ? <Text selectable style={[styles.body, local.ownText]}>{content}</Text> : <MarkdownContent content={formatted} />}
+    {onSave ? <Pressable accessibilityRole="button" onPress={onSave} style={local.noteAction}>
+      <Feather name="bookmark" size={14} color={color.blue} />
+      <Text style={local.noteLabel}>保存到记事本</Text>
+    </Pressable> : null}
   </View>;
 });
 
@@ -183,6 +193,8 @@ const local = StyleSheet.create({
   assistant: { borderBottomLeftRadius: 6 },
   own: { alignSelf: 'flex-end', backgroundColor: color.blue, borderColor: color.blue, borderBottomRightRadius: 6 },
   ownText: { color: color.white },
+  noteAction: { minHeight: 44, flexDirection: 'row', gap: 6, alignItems: 'center', alignSelf: 'flex-start' },
+  noteLabel: { color: color.blue, fontSize: 13, fontWeight: '700' },
   composer: { ...surfaceShadow, flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 12, padding: 5,
     paddingLeft: 13, borderRadius: 19, borderWidth: 1, borderColor: color.line, backgroundColor: color.white },
   input: { flex: 1, borderWidth: 0, backgroundColor: 'transparent', paddingHorizontal: 0 },

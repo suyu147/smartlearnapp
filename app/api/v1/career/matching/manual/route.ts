@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { insightRequest, withInsight } from '@/lib/career/insight-proxy';
 import type { ManualMatchPayload, MatchResult } from '@/lib/career/types';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import { requireCareerItem } from '@/lib/career/resume-ownership';
 
 /** 手动能力匹配；不传 resumeId 时免登录 */
 export async function POST(req: NextRequest) {
@@ -14,7 +16,7 @@ export async function POST(req: NextRequest) {
     return withInsight<never>(() => Promise.reject(new Error('缺少 targetRoleId')));
   }
 
-  return withInsight<MatchResult>(() =>
+  const match = () =>
     insightRequest<MatchResult>({
       method: 'POST',
       path: '/api/v1/matching/manual',
@@ -29,6 +31,11 @@ export async function POST(req: NextRequest) {
       },
       // 带 resumeId 时必须携带职能洞察登录态
       auth: Boolean(payload.resumeId),
-    }),
-  );
+    });
+  if (!payload.resumeId) return withInsight(match);
+  const resumeId = payload.resumeId;
+  return withAuth(req, (_, { user }) => withInsight(async () => {
+    await requireCareerItem(user.id, 'resume', resumeId);
+    return match();
+  }));
 }

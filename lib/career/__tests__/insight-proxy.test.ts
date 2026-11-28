@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NextRequest } from 'next/server';
+import { POST as matchOnMobile } from '@/app/api/v1/mobile/career/matching/manual/route';
 import {
   InsightError,
   RESUME_MAX_BYTES,
@@ -96,6 +98,30 @@ describe('insightRequest', () => {
     expect(data).toEqual({ status: 'healthy' });
     const [, init] = fetchMock.mock.calls[0];
     expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  it('validates mobile diagnosis and forwards the manual matching contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+      code: 0, data: { reportId: 'report-1', roleName: '数据分析师', gaps: [] },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubEnv('AUTH_MODE', 'disabled');
+    const request = (skills: string[]) => new NextRequest('http://localhost/api/v1/mobile/career/matching/manual', {
+      method: 'POST',
+      body: JSON.stringify({ targetRoleId: 'analyst', skills, experienceYears: 0, resumeId: 'ignored' }),
+    });
+    try {
+      expect((await matchOnMobile(request([]))).status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+      const response = await matchOnMobile(request([' SQL ']));
+      expect(response.status).toBe(200);
+      expect((await response.json()).data.reportId).toBe('report-1');
+      const [[url, init]] = fetchMock.mock.calls;
+      expect(String(url)).toBe(`${BASE}/api/v1/matching/manual`);
+      expect(JSON.parse(init.body)).toMatchObject({ targetRoleId: 'analyst', skills: ['SQL'], experienceYears: 0, resumeId: '' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('需要登录时换取 token 并注入 Authorization', async () => {

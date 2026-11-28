@@ -4,7 +4,7 @@ import type { LearningPath, Resource, ResourceType } from './types';
 const base = (process.env.EXPO_PUBLIC_API_URL ?? '').trim().replace(/\/+$/, '');
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(message: string, public readonly status: number, public readonly code?: string) {
     super(message);
   }
 }
@@ -14,35 +14,40 @@ export function apiUrl(path: string) {
   return base + '/api/v1' + path;
 }
 
-async function request(path: string, token?: string, body?: unknown, signal?: AbortSignal) {
+type RequestOptions = { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; timeoutMs?: number };
+
+async function request(path: string, token?: string, body?: unknown, signal?: AbortSignal, options: RequestOptions = {}) {
   const url = apiUrl(path);
+  const multipart = body instanceof FormData;
   const response = await fetch(url, {
-    method: body === undefined ? 'GET' : 'POST',
+    method: options.method ?? (body === undefined ? 'GET' : 'POST'),
     headers: {
       ...(token ? { Authorization: 'Bearer ' + token } : {}),
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(body === undefined || multipart ? {} : { 'Content-Type': 'application/json' }),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: multipart ? body : body === undefined ? undefined : JSON.stringify(body),
     signal,
   }).catch(cause => {
     if (signal?.aborted) throw cause;
     throw new ApiError('无法连接学习服务器，请检查网络', 0);
   });
   if (!response.ok) {
-    const details = await response.json().catch(() => null) as { error?: string } | null;
-    throw new ApiError(details?.error || '请求失败，请稍后重试', response.status);
+    const details = await response.json().catch(() => null) as { error?: string | { message?: string; code?: string }; message?: string } | null;
+    const message = typeof details?.error === 'string' ? details.error : details?.error?.message;
+    const code = typeof details?.error === 'object' ? details.error?.code : undefined;
+    throw new ApiError(message || details?.message || '请求失败，请稍后重试', response.status, code);
   }
   return response;
 }
 
-export async function api<T>(path: string, token?: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function api<T>(path: string, token?: string, body?: unknown, signal?: AbortSignal, options: RequestOptions = {}): Promise<T> {
   const active = new AbortController();
   const cancel = () => active.abort();
   if (signal?.aborted) cancel();
   signal?.addEventListener('abort', cancel);
-  const timeout = setTimeout(cancel, 15_000);
+  const timeout = setTimeout(cancel, options.timeoutMs ?? 15_000);
   try {
-    const response = await request(path, token, body, active.signal);
+    const response = await request(path, token, body, active.signal, options);
     const payload = await response.json();
     return payload.success === true && 'data' in payload ? payload.data : payload;
   } catch (cause) {
@@ -56,6 +61,14 @@ export async function api<T>(path: string, token?: string, body?: unknown, signa
     clearTimeout(timeout);
     signal?.removeEventListener('abort', cancel);
   }
+}
+
+export function apiPut<T>(path: string, token: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return api<T>(path, token, body, signal, { method: 'PUT' });
+}
+
+export function apiDelete<T = { success: boolean }>(path: string, token: string, signal?: AbortSignal): Promise<T> {
+  return api<T>(path, token, undefined, signal, { method: 'DELETE' });
 }
 
 export const isTemporaryError = (cause: unknown) =>

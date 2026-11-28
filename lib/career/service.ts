@@ -43,13 +43,6 @@ function cached<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promis
   });
 }
 
-/** 写操作后清空缓存（简历增删会改变列表） */
-function invalidate(prefix: string) {
-  for (const key of [...cache.keys()]) {
-    if (key.startsWith(prefix)) cache.delete(key);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // 健康探测
 // ---------------------------------------------------------------------------
@@ -107,9 +100,7 @@ export function getLearningPath(reportId: string): Promise<LearningPath> {
 export async function uploadResume(file: File): Promise<UploadTask> {
   const body = new FormData();
   body.append('file', file);
-  const task = await apiUpload<UploadTask>(`${BASE}/resumes`, body);
-  invalidate('resumes');
-  return task;
+  return apiUpload<UploadTask>(`${BASE}/resumes`, body);
 }
 
 /** 查询解析任务进度 */
@@ -144,28 +135,22 @@ export async function confirmResume(
   resumeId: string,
   payload: ResumeConfirmPayload,
 ): Promise<{ resumeId: string; confirmed: boolean; skillCount: number }> {
-  const result = await apiPut<{ resumeId: string; confirmed: boolean; skillCount: number }>(
+  return apiPut<{ resumeId: string; confirmed: boolean; skillCount: number }>(
     `${BASE}/resumes/${encodeURIComponent(resumeId)}/confirmation`,
     payload as ResumeConfirmPayload,
   );
-  invalidate('resumes');
-  return result;
 }
 
 /** 我的简历列表 */
 export function listMyResumes(limit = 20): Promise<{ items: ResumeRecord[]; total: number }> {
-  return cached(`resumes:${limit}`, 60_000, () =>
-    apiGet<{ items: ResumeRecord[]; total: number }>(`${BASE}/resumes?limit=${limit}`),
-  );
+  return apiGet<{ items: ResumeRecord[]; total: number }>(`${BASE}/resumes?limit=${limit}`);
 }
 
 /** 删除简历 */
 export async function deleteResume(resumeId: string): Promise<{ resumeId: string; deleted: boolean }> {
-  const result = await apiDelete<{ resumeId: string; deleted: boolean }>(
+  return apiDelete<{ resumeId: string; deleted: boolean }>(
     `${BASE}/resumes/${encodeURIComponent(resumeId)}`,
   );
-  invalidate('resumes');
-  return result;
 }
 
 // ---------------------------------------------------------------------------

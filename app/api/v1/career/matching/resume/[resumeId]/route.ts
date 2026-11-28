@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
 import { insightRequest, withInsight } from '@/lib/career/insight-proxy';
+import { withAuth } from '@/lib/deeptutor/services/auth-middleware';
+import { requireCareerItem } from '@/lib/career/resume-ownership';
 import type { MatchResult } from '@/lib/career/types';
 
 /** 用已确认的简历直接匹配目标岗位（需登录职能洞察） */
@@ -13,12 +15,13 @@ export async function POST(
     return withInsight<never>(() => Promise.reject(new Error('缺少 targetRoleId')));
   }
 
-  return withInsight<MatchResult>(() =>
-    insightRequest<MatchResult>({
+  return withAuth(req, (_, { user }) => withInsight(async () => {
+    await requireCareerItem(user.id, 'resume', resumeId);
+    return insightRequest<MatchResult>({
       method: 'POST',
       path: `/api/v1/matching/resume/${encodeURIComponent(resumeId)}`,
       query: { targetRoleId },
       auth: true,
-    }),
-  );
+    });
+  }));
 }

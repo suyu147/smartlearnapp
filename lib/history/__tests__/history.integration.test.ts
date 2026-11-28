@@ -12,6 +12,16 @@ import { PUT as putProfile, GET as getProfile } from '@/app/api/v1/history/profi
 import { PUT as putSettings, GET as getSettings } from '@/app/api/v1/settings/route';
 import { POST as submitQuiz } from '@/app/api/v1/quiz-attempts/route';
 import { NotebookServiceImpl } from '@/lib/deeptutor/services/notebook';
+import { GET as listMobileNotebooks } from '@/app/api/v1/mobile/notebooks/route';
+import { GET as getMobileNotebook, PUT as saveMobileNote } from '@/app/api/v1/mobile/notebooks/[id]/route';
+import { DELETE as deleteMobileNote } from '@/app/api/v1/mobile/notebooks/[id]/records/[recordId]/route';
+import { GET as getWebNotebook } from '@/app/api/v1/notebook/[id]/route';
+import { GET as listCareerResumes, POST as uploadCareerResume } from '@/app/api/v1/career/resumes/route';
+import { GET as getCareerTask } from '@/app/api/v1/career/tasks/[taskId]/route';
+import { PUT as confirmCareerResume } from '@/app/api/v1/career/resumes/[resumeId]/confirmation/route';
+import { DELETE as deleteCareerResume } from '@/app/api/v1/career/resumes/[resumeId]/route';
+import { POST as matchCareerResume } from '@/app/api/v1/career/matching/manual/route';
+import { resetTokenCacheForTest } from '@/lib/career/insight-proxy';
 import { CowriterDbService } from '@/lib/deeptutor/services/cowriter-db-service';
 import { ensureSession, addMessage } from '@/lib/deeptutor/services/session';
 import { mutateBook } from '../book-mutation';
@@ -129,6 +139,89 @@ describe.skipIf(!enabled)('cross-device history against PostgreSQL', () => {
     await service.updateDocument(doc!.id, { content: 'new' }, doc!.version);
     await expect(service.updateDocument(doc!.id, { content: 'stale' }, doc!.version)).rejects.toBeInstanceOf(HistoryConflict);
     expect((await service.getDocument(doc!.id))?.content).toBe('new');
+  });
+  it('reuses the shared resume parser while isolating its tasks and resumes by account', async () => {
+    vi.stubEnv('CAREER_INSIGHT_BASE_URL', 'https://career.test');
+    vi.stubEnv('CAREER_INSIGHT_USERNAME', 'fixture');
+    vi.stubEnv('CAREER_INSIGHT_PASSWORD', 'fixture');
+    resetTokenCacheForTest();
+    const record = { resumeId: 'resume-1', skills: [], fileName: 'resume.txt' };
+    const upstream = vi.fn(async (input: string | URL, options: RequestInit) => {
+      const url = new URL(input);
+      const reply = (data: unknown) => Response.json({ code: 0, data });
+      switch (url.pathname) {
+        case '/api/v1/auth/login': return reply({ accessToken: 'fixture-token' });
+        case '/api/v1/resumes': {
+          const file = (options.body as FormData).get('file') as File;
+          expect(file.name).toBe('resume.txt');
+          expect(await file.text()).toBe('Skills: SQL');
+          return reply({ taskId: 'task-1', progress: 0 });
+        }
+        case '/api/v1/tasks/task-1': return reply({ status: 'completed', progress: 100, result: record });
+        case '/api/v1/me/resumes': return reply({ items: [record, { resumeId: 'older-unassigned' }], total: 2 });
+        case '/api/v1/resumes/resume-1/confirmation': return reply({ resumeId: record.resumeId, confirmed: true });
+        case '/api/v1/matching/manual': return reply({ reportId: 'match-1' });
+        case '/api/v1/me/resumes/resume-1': return reply({ resumeId: record.resumeId, deleted: true });
+        default: throw new Error('Unexpected career route ' + url.pathname);
+      }
+    });
+    vi.stubGlobal('fetch', upstream);
+    const base = '/api/v1/career';
+    const resumePath = base + '/resumes/resume-1';
+    const resumeParams = { params: Promise.resolve({ resumeId: record.resumeId }) };
+    const taskPath = base + '/tasks/task-1';
+    const taskParams = { params: Promise.resolve({ taskId: 'task-1' }) };
+    try {
+      const form = new FormData();
+      form.append('file', new File(['Skills: SQL'], 'resume.txt', { type: 'text/plain' }));
+      const upload = new NextRequest('http://localhost' + base + '/resumes', {
+        method: 'POST', body: form, headers: { 'x-test-user': a },
+      });
+      const uploaded = await uploadCareerResume(upload);
+      expect(uploaded.status, await uploaded.text()).toBe(200);
+      expect((await getCareerTask(req(taskPath, b), taskParams)).status).toBe(404);
+      expect((await getCareerTask(req(taskPath), taskParams)).status).toBe(200);
+      expect((await (await listCareerResumes(req(base + '/resumes'))).json()).data.items).toEqual([record]);
+      expect((await (await listCareerResumes(req(base + '/resumes', b))).json()).data.items).toEqual([]);
+      const confirmation = resumePath + '/confirmation';
+      expect((await confirmCareerResume(req(confirmation, b, 'PUT', { skills: ['SQL'] }), resumeParams)).status).toBe(404);
+      expect((await confirmCareerResume(req(confirmation, a, 'PUT', { skills: ['SQL'] }), resumeParams)).status).toBe(200);
+      const match = { targetRoleId: 'analyst', resumeId: record.resumeId };
+      expect((await matchCareerResume(req(base + '/matching/manual', b, 'POST', match))).status).toBe(404);
+      expect((await matchCareerResume(req(base + '/matching/manual', a, 'POST', match))).status).toBe(200);
+      expect((await deleteCareerResume(req(resumePath, a, 'DELETE'), resumeParams)).status).toBe(200);
+      expect((await getCareerTask(req(taskPath), taskParams)).status).toBe(404);
+    } finally {
+      resetTokenCacheForTest();
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+  it('shares existing notebooks and mobile notes with the web account', async () => {
+    const notebook = await new NotebookServiceImpl().createNotebook(a, 'Shared notes');
+    const parent = { params: Promise.resolve({ id: notebook.id }) };
+    const mobile = '/api/v1/mobile/notebooks';
+    const detail = mobile + '/' + notebook.id;
+    const web = '/api/v1/notebook/' + notebook.id;
+    const list = await listMobileNotebooks(req(mobile));
+    expect((await list.json()).data).toContainEqual(expect.objectContaining({ id: notebook.id }));
+    expect((await getMobileNotebook(req(detail, b), parent)).status).toBe(404);
+
+    const content = '    preserve Markdown indentation\n';
+    const response = await saveMobileNote(req(detail, a, 'PUT', {
+      title: 'App lecture', content, metadata: { source: 'document', resourceId: 'lecture-1' },
+    }), parent);
+    expect(response.status).toBe(200);
+    const { data: note } = await response.json();
+    const readOnWeb = () => getWebNotebook(req(web, a, 'GET', undefined, { 'x-user-id': a }), parent);
+    expect((await (await readOnWeb()).json()).data.records).toEqual([
+      expect.objectContaining({ id: note.id, content, metadata: { source: 'document', resourceId: 'lecture-1' } }),
+    ]);
+    const deletePath = detail + '/records/' + note.id;
+    const record = { params: Promise.resolve({ id: notebook.id, recordId: note.id }) };
+    expect((await deleteMobileNote(req(deletePath, b, 'DELETE'), record)).status).toBe(409);
+    expect((await deleteMobileNote(req(deletePath, a, 'DELETE'), record)).status).toBe(200);
+    expect((await (await readOnWeb()).json()).data.records).toEqual([]);
   });
   it('saves quiz submissions idempotently without requiring AI evaluation', async () => {
     const body = { attemptId: crypto.randomUUID(), title: 'Quiz', answers: [{ questionId: 'q1', topic: 'tree', question: 'root?', userAnswer: 'A', correctAnswer: 'B', correct: false }] };
